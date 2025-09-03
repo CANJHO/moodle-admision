@@ -28,10 +28,32 @@ except Exception:
 
 with st.sidebar:
     st.subheader("⚙️ Parámetros generales")
+    # Botón/link rojo (texto blanco) a otra app
+    st.markdown(
+        """
+        <a href="https://asignadorzoom-gqujexxocuamxss77jq7wy.streamlit.app/"
+           target="_blank"
+           style="
+             display:block;
+             text-align:center;
+             padding:0.60rem 0.8rem;
+             background:#d32f2f;
+             color:#ffffff;
+             border-radius:8px;
+             text-decoration:none;
+             font-weight:700;
+             margin-bottom:0.75rem;
+           ">
+           ASIGNADOR UAI
+        </a>
+        """,
+        unsafe_allow_html=True,
+    )
     base_url = st.text_input("Base URL de Moodle", value=BASE_URL, help="Ej.: https://aulavirtual.autonomadeica.edu.pe")
     tz_offset = st.text_input("TZ offset local", value="-05:00", help="Ej.: -05:00")
     workers = st.slider("Hilos paralelos", min_value=4, max_value=32, value=16, step=1)
     only_roles = st.text_input("Roles a incluir", value="student", help="Ej.: student (múltiples separados por coma)")
+    
 
 col1, col2 = st.columns([1,1])
 with col1:
