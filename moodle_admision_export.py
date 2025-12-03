@@ -318,7 +318,8 @@ def write_excel_all_in_one(
     out_path: Path,
     rows: List[Dict[str, Any]],
     criteria_by_area: Dict[str, Dict[str, float]] = None,
-    nivel_threshold: float = None,
+    nivel_threshold_base: float = None,
+    nivel_by_area: Dict[str, Dict[str, float]] = None,
 ):
     """
     Genera el Excel con hojas:
@@ -326,7 +327,8 @@ def write_excel_all_in_one(
       - RESUMEN  (incluye CONDICIÓN + NIVELACIÓN por curso)
 
     criteria_by_area: permite sobreescribir los criterios por área (A/B/C)
-    nivel_threshold:  umbral decimal (0.30 = 30%) para determinar nivelación
+    nivel_threshold_base: umbral decimal base (0.30 = 30%) cuando no hay umbral específico
+    nivel_by_area: umbral de nivelación por área y curso, en decimal (0.30 = 30%)
     """
     if not rows:
         raise RuntimeError("No hay filas para exportar.")
@@ -334,8 +336,8 @@ def write_excel_all_in_one(
     # Valores por defecto cuando no se pasan desde la UI/CLI
     if criteria_by_area is None:
         criteria_by_area = CRITERIA_BY_AREA
-    if nivel_threshold is None:
-        nivel_threshold = NIVEL_THRESHOLD
+    if nivel_threshold_base is None:
+        nivel_threshold_base = NIVEL_THRESHOLD  # 0.30 por defecto
 
     df = pd.DataFrame(rows)
 
@@ -379,17 +381,23 @@ def write_excel_all_in_one(
         grade = float(r.get("Calificación/20", 0) or 0)
         condicion = "INGRESÓ" if grade > 0 else ""
 
-        # ---------- NIVELACIÓN POR CURSO ----------
-        # Se evalúa con el % obtenido en cada curso:
-        # si % <= nivel_threshold  (ej. 0.30 = 30%)  ⇒ requiere nivelación en ese curso.
+        # ---------- UMBRALES DE NIVELACIÓN POR CURSO ----------
+        # Si no se pasó nada desde la UI, usamos el umbral base (todo 0.30)
+        area_niveles = (nivel_by_area or {}).get(area, {})
+        thr_com = area_niveles.get("COMUNICACIÓN", nivel_threshold_base)
+        thr_hab = area_niveles.get("HABILIDADES COMUNICATIVAS", nivel_threshold_base)
+        thr_mat = area_niveles.get("MATEMÁTICA", nivel_threshold_base)
+        thr_cta = area_niveles.get("CTA/CCSS", nivel_threshold_base)
 
-        com_nivel = "COMUNICACIÓN" if pct_com <= nivel_threshold else ""
-        hab_nivel = "HABILIDADES COMUNICATIVAS" if pct_hab <= nivel_threshold else ""
-        mat_nivel = "MATEMATICA" if pct_mat <= nivel_threshold else ""  # nombre de columna en plantilla
+        # ---------- NIVELACIÓN POR CURSO ----------
+        # Regla: si % obtenido es <= umbral ⇒ va a nivelación
+        com_nivel = "COMUNICACIÓN" if pct_com <= thr_com else ""
+        hab_nivel = "HABILIDADES COMUNICATIVAS" if pct_hab <= thr_hab else ""
+        mat_nivel = "MATEMATICA" if pct_mat <= thr_mat else ""  # nombre de columna en plantilla
 
         cta_nivel = ""
         ccss_nivel = ""
-        if pct_cta <= nivel_threshold:
+        if pct_cta <= thr_cta:
             # Para Área C es CCSS (Ciencias Sociales), para A y B es CTA
             if area == "C":
                 ccss_nivel = "CIENCIAS SOCIALES"
@@ -480,6 +488,7 @@ def write_excel_all_in_one(
         df_res[ordered_cols].to_excel(writer, sheet_name="RESUMEN", index=False)
 
     return out_path
+
 
 
 
