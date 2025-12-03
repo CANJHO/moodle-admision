@@ -323,7 +323,7 @@ if run:
             core.write_excel_all_in_one(
                 out_path,
                 rows,
-                nivel_threshold=nivel_threshold,  # usa la lógica ≤ 30% para nivelación
+                nivel_threshold_base=nivel_threshold,  # usa la lógica ≤ 30% para nivelación
             )
             data = out_path.read_bytes()
 
