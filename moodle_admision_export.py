@@ -79,6 +79,11 @@ AREA_DEFS: Dict[str, Dict[str, Any]] = {
     },
 }
 
+# -------- UMBRAL DE NIVELACIÓN --------
+# 0.30 = 30% (se compara contra las columnas % (COM), % (HAB), etc. que van de 0 a 1)
+NIVEL_THRESHOLD = 0.30
+
+
 # -------- Sesión HTTP con reintentos --------
 session = requests.Session()
 retries = Retry(
@@ -309,7 +314,6 @@ CRITERIA_BY_AREA = {
     },
 }
 
-# -------- Export --------
 def write_excel_all_in_one(out_path: Path, rows: List[Dict[str,Any]]):
     if not rows:
         raise RuntimeError("No hay filas para exportar.")
@@ -324,13 +328,13 @@ def write_excel_all_in_one(out_path: Path, rows: List[Dict[str,Any]]):
     if sort_cols:
         df = df.sort_values(by=sort_cols, kind="mergesort").reset_index(drop=True)
 
-    # ---------- RESUMEN (Puntaje | CRITERIO | %) ----------
+    # ---------- RESUMEN (Puntaje | CRITERIO | % + NIVELACIÓN) ----------
     resumen_rows = []
     for _, r in df.iterrows():
         area = str(r.get("Área","")).upper().strip()
         crit = CRITERIA_BY_AREA.get(area, {})
 
-        # % ya calculados en RESULTADOS
+        # % ya calculados en RESULTADOS (0.0–1.0)
         pct_com = float(r.get("% COMUNICACIÓN", 0) or 0)
         pct_hab = float(r.get("% HABILIDADES COMUNICATIVAS", 0) or 0)
         pct_mat = float(r.get("% MATEMÁTICA", 0) or 0)
@@ -349,6 +353,32 @@ def write_excel_all_in_one(out_path: Path, rows: List[Dict[str,Any]]):
         p_cta = c_cta * pct_cta
 
         total = p_com + p_hab + p_mat + p_cta
+
+        # ---------- CONDICIÓN ----------
+        # INGRESÓ si la nota (Calificación/20) es > 0
+        grade = float(r.get("Calificación/20", 0) or 0)
+        condicion = "INGRESÓ" if grade > 0 else ""
+
+        # ---------- NIVELACIÓN POR CURSO ----------
+        # Se evalúa con el % obtenido en cada curso:
+        # si % <= 30%  (NIVEL_THRESHOLD = 0.30)  ⇒ requiere nivelación en ese curso.
+
+        nvl_com = "COMUNICACIÓN" if pct_com <= NIVEL_THRESHOLD else ""
+        nvl_hab = "HABILIDADES COMUNICATIVAS" if pct_hab <= NIVEL_THRESHOLD else ""
+        nvl_mat = "MATEMÁTICA" if pct_mat <= NIVEL_THRESHOLD else ""
+
+        nvl_cta = ""
+        nvl_ccss = ""
+        if pct_cta <= NIVEL_THRESHOLD:
+            # Para A y B es CTA, para C es CCSS (Ciencias Sociales)
+            if area == "C":
+                nvl_ccss = "CIENCIAS SOCIALES"
+            else:
+                nvl_cta = "CIENCIA, TECNOLOGÍA Y AMBIENTE"
+
+        # Si al menos un curso requiere nivelación, marcamos el programa
+        requiere_nivel = any([nvl_com, nvl_hab, nvl_mat, nvl_cta, nvl_ccss])
+        programa_nivel = "REQUIERE NIVELACIÓN" if requiere_nivel else ""
 
         resumen_rows.append({
             "Apellidos y nombres": f"{r.get('Apellido(s)','')} {r.get('Nombre','')}".strip(),
@@ -386,7 +416,14 @@ def write_excel_all_in_one(out_path: Path, rows: List[Dict[str,Any]]):
             "% RESPONDIDAS": r.get("%DE PREGUNTAS RESPONDIDAS", 0.0),
             "% NO RESPONDIDAS": r.get("%DE PREGUNTAS NO RESPONDIDAS", 0.0),
 
-            "CONDICIÓN": "",
+            # NUEVO: condición + nivelación
+            "CONDICIÓN": condicion,
+            "PROGRAMA DE NIVELACIÓN": programa_nivel,
+            "NVL COMUNICACIÓN": nvl_com,
+            "NVL HABILIDADES COMUNICATIVAS": nvl_hab,
+            "NVL MATEMÁTICA": nvl_mat,
+            "NVL CTA": nvl_cta,
+            "NVL CIENCIAS SOCIALES": nvl_ccss,
         })
 
     df_res = pd.DataFrame(resumen_rows)
@@ -395,7 +432,7 @@ def write_excel_all_in_one(out_path: Path, rows: List[Dict[str,Any]]):
     if {"Programa Académico","DNI"}.issubset(df_res.columns):
         df_res = df_res.sort_values(by=["Programa Académico","DNI"], kind="mergesort").reset_index(drop=True)
 
-    # Columnas ordenadas (Puntaje | CRITERIO | % por subárea)
+    # Columnas ordenadas (Puntaje | CRITERIO | % por subárea + Nivelación)
     ordered_cols = [
         "Apellidos y nombres","DNI","Programa Académico","Sede o Filial","Área","Asistencia",
 
@@ -406,7 +443,14 @@ def write_excel_all_in_one(out_path: Path, rows: List[Dict[str,Any]]):
 
         "TOTAL","%_TOTAL",
         "PREGUNTAS RESPONDIDAS","PREGUNTAS NO RESPONDIDAS","% RESPONDIDAS","% NO RESPONDIDAS",
+
         "CONDICIÓN",
+        "PROGRAMA DE NIVELACIÓN",
+        "NVL COMUNICACIÓN",
+        "NVL HABILIDADES COMUNICATIVAS",
+        "NVL MATEMÁTICA",
+        "NVL CTA",
+        "NVL CIENCIAS SOCIALES",
     ]
     ordered_cols = [c for c in ordered_cols if c in df_res.columns] + [c for c in df_res.columns if c not in ordered_cols]
 
@@ -416,6 +460,7 @@ def write_excel_all_in_one(out_path: Path, rows: List[Dict[str,Any]]):
         df_res[ordered_cols].to_excel(writer, sheet_name="RESUMEN", index=False)
 
     return out_path
+
 
 # -------- CLI / Main --------
 def parse_quiz_map(s: str) -> Dict[int, str]:

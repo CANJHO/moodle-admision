@@ -64,11 +64,25 @@ with col2:
 
 quiz_map_str = st.text_input(
     "🧭 Mapa quiz→Área (A/B/C)",
+    key="quiz_map_str",
     placeholder="Ej.: 11907=A,11908=B,11909=C",
-    help="Puedes obtener los IDs desde Moodle o con 'Descubrir quizzes'."
+    help="Puedes obtener los IDs desde Moodle o autollenarlo con 'Descubrir quizzes'."
 )
 
+
 # --- Utilidad: descubrir quizzes por cursos ---
+# --- Utilidad: descubrir quizzes por cursos ---
+def _guess_area_from_name(name: str) -> str:
+    """Intenta deducir el área A/B/C a partir del nombre del quiz."""
+    n = name.lower()
+    if "ingenier" in n:
+        return "A"          # Examen de Admisión – Ingenierías
+    if "salud" in n:
+        return "B"          # Ciencias de la Salud
+    if "humana" in n:
+        return "C"          # Ciencias Humanas
+    return ""               # sin área detectada, se edita a mano
+
 def discover_quizzes_ui():
     if not course_ids_str.strip():
         st.warning("Primero ingresa los ID(s) de curso.")
@@ -79,16 +93,39 @@ def discover_quizzes_ui():
         if not quizzes:
             st.info("No se encontraron quizzes en esos cursos.")
             return
+
         st.success(f"Quizzes encontrados ({len(quizzes)}):")
+
+        sugerencias = []
         for q in quizzes:
-            st.write(f"- **{q['quizname']}**  —  ID: `{q['quizid']}`  (curso {q['courseid']})")
-        st.caption("Usa los IDs listados para armar el mapa ej. 11907=A,11908=B,11909=C")
+            area_guess = _guess_area_from_name(q["quizname"])
+            # Mostrar el quiz con la sugerencia de área (si existe)
+            if area_guess:
+                st.write(
+                    f"- **{q['quizname']}** — ID: `{q['quizid']}`  (curso {q['courseid']}) → área sugerida: **{area_guess}**"
+                )
+                sugerencias.append(f"{q['quizid']}={area_guess}")
+            else:
+                st.write(
+                    f"- **{q['quizname']}** — ID: `{q['quizid']}`  (curso {q['courseid']})"
+                )
+
+        st.caption("Puedes editar el área sugerida (A/B/C) desde el cuadro de texto Mapa quiz→Área.")
+
+        # Autollenar el input si hay sugerencias
+        if sugerencias:
+            st.session_state["quiz_map_str"] = ",".join(sugerencias)
+            st.info("Se autocompletó el mapa quiz→Área. Revísalo y ajusta si es necesario.")
+        else:
+            st.info("No se pudo inferir áreas automáticamente. Completa el mapa a mano (A/B/C).")
+
     except Exception as e:
         st.error(f"Error al descubrir quizzes: {e}")
 
 st.button("🔎 Descubrir quizzes en los cursos", on_click=discover_quizzes_ui)
 
 st.markdown("---")
+
 
 # --- Botón principal ---
 run = st.button("🚀 Generar Excel (RESULTADOS + RESUMEN)", type="primary")
