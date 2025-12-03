@@ -314,9 +314,29 @@ CRITERIA_BY_AREA = {
     },
 }
 
-def write_excel_all_in_one(out_path: Path, rows: List[Dict[str,Any]]):
+def write_excel_all_in_one(
+    out_path: Path,
+    rows: List[Dict[str, Any]],
+    criteria_by_area: Dict[str, Dict[str, float]] = None,
+    nivel_threshold: float = None,
+):
+    """
+    Genera el Excel con hojas:
+      - RESULTADOS
+      - RESUMEN  (incluye CONDICIÓN + NIVELACIÓN por curso)
+
+    criteria_by_area: permite sobreescribir los criterios por área (A/B/C)
+    nivel_threshold:  umbral decimal (0.30 = 30%) para determinar nivelación
+    """
     if not rows:
         raise RuntimeError("No hay filas para exportar.")
+
+    # Valores por defecto cuando no se pasan desde la UI/CLI
+    if criteria_by_area is None:
+        criteria_by_area = CRITERIA_BY_AREA
+    if nivel_threshold is None:
+        nivel_threshold = NIVEL_THRESHOLD
+
     df = pd.DataFrame(rows)
 
     # Orden: Programa Académico asc, luego DNI asc
@@ -331,8 +351,8 @@ def write_excel_all_in_one(out_path: Path, rows: List[Dict[str,Any]]):
     # ---------- RESUMEN (Puntaje | CRITERIO | % + NIVELACIÓN) ----------
     resumen_rows = []
     for _, r in df.iterrows():
-        area = str(r.get("Área","")).upper().strip()
-        crit = CRITERIA_BY_AREA.get(area, {})
+        area = str(r.get("Área", "")).upper().strip()
+        crit = criteria_by_area.get(area, {})
 
         # % ya calculados en RESULTADOS (0.0–1.0)
         pct_com = float(r.get("% COMUNICACIÓN", 0) or 0)
@@ -361,15 +381,15 @@ def write_excel_all_in_one(out_path: Path, rows: List[Dict[str,Any]]):
 
         # ---------- NIVELACIÓN POR CURSO ----------
         # Se evalúa con el % obtenido en cada curso:
-        # si % <= 30%  (NIVEL_THRESHOLD = 0.30)  ⇒ requiere nivelación en ese curso.
+        # si % <= nivel_threshold  (ej. 0.30 = 30%)  ⇒ requiere nivelación en ese curso.
 
-        com_nivel = "COMUNICACIÓN" if pct_com <= NIVEL_THRESHOLD else ""
-        hab_nivel = "HABILIDADES COMUNICATIVAS" if pct_hab <= NIVEL_THRESHOLD else ""
-        mat_nivel = "MATEMATICA" if pct_mat <= NIVEL_THRESHOLD else ""  # nombre de columna de plantilla
+        com_nivel = "COMUNICACIÓN" if pct_com <= nivel_threshold else ""
+        hab_nivel = "HABILIDADES COMUNICATIVAS" if pct_hab <= nivel_threshold else ""
+        mat_nivel = "MATEMATICA" if pct_mat <= nivel_threshold else ""  # nombre de columna en plantilla
 
         cta_nivel = ""
         ccss_nivel = ""
-        if pct_cta <= NIVEL_THRESHOLD:
+        if pct_cta <= nivel_threshold:
             # Para Área C es CCSS (Ciencias Sociales), para A y B es CTA
             if area == "C":
                 ccss_nivel = "CIENCIAS SOCIALES"
@@ -416,7 +436,7 @@ def write_excel_all_in_one(out_path: Path, rows: List[Dict[str,Any]]):
             "% RESPONDIDAS": r.get("%DE PREGUNTAS RESPONDIDAS", 0.0),
             "% NO RESPONDIDAS": r.get("%DE PREGUNTAS NO RESPONDIDAS", 0.0),
 
-            # NUEVO: columnas de tu plantilla
+            # columnas extra de la plantilla
             "CONDICIÓN": condicion,
             "PROGRAMA DE NIVELACIÓN": programa_nivel,
             "COMUNICACIÓN.1": com_nivel,
@@ -432,7 +452,7 @@ def write_excel_all_in_one(out_path: Path, rows: List[Dict[str,Any]]):
     if {"Programa Académico","DNI"}.issubset(df_res.columns):
         df_res = df_res.sort_values(by=["Programa Académico","DNI"], kind="mergesort").reset_index(drop=True)
 
-    # Columnas ordenadas (Puntaje | CRITERIO | % por subárea + Nivelación)
+    # Columnas ordenadas
     ordered_cols = [
         "Apellidos y nombres","DNI","Programa Académico","Sede o Filial","Área","Asistencia",
 
@@ -460,6 +480,7 @@ def write_excel_all_in_one(out_path: Path, rows: List[Dict[str,Any]]):
         df_res[ordered_cols].to_excel(writer, sheet_name="RESUMEN", index=False)
 
     return out_path
+
 
 
 

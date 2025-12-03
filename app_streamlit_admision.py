@@ -49,10 +49,80 @@ with st.sidebar:
         """,
         unsafe_allow_html=True,
     )
-    base_url = st.text_input("Base URL de Moodle", value=BASE_URL, help="Ej.: https://aulavirtual.autonomadeica.edu.pe")
+    base_url = st.text_input(
+        "Base URL de Moodle",
+        value=BASE_URL,
+        help="Ej.: https://aulavirtual.autonomadeica.edu.pe",
+    )
     tz_offset = st.text_input("TZ offset local", value="-05:00", help="Ej.: -05:00")
     workers = st.slider("Hilos paralelos", min_value=4, max_value=32, value=16, step=1)
-    only_roles = st.text_input("Roles a incluir", value="student", help="Ej.: student (múltiples separados por coma)")
+    only_roles = st.text_input(
+        "Roles a incluir",
+        value="student",
+        help="Ej.: student (múltiples separados por coma)",
+    )
+
+    st.markdown("---")
+    st.subheader("🧮 Nivelación")
+
+    # Umbral de nivelación en porcentaje (se pasará como decimal a la lógica)
+    nivel_threshold_pct = st.number_input(
+        "Umbral de nivelación (%)",
+        min_value=0.0,
+        max_value=100.0,
+        value=30.0,
+        step=1.0,
+        help="Si el porcentaje obtenido en un curso es menor o igual a este valor, el postulante requiere nivelación en ese curso.",
+    )
+
+    st.markdown("---")
+    st.subheader("📊 Pesos por área (CRITERIOS)")
+
+    area_cfg = {}
+    # Usamos los valores por defecto definidos en core.CRITERIA_BY_AREA
+    for area_key, area_label in [
+        ("A", "Área A – Ingenierías"),
+        ("B", "Área B – Ciencias de la Salud"),
+        ("C", "Área C – Ciencias Humanas"),
+    ]:
+        defaults = core.CRITERIA_BY_AREA.get(area_key, {})
+        with st.expander(f"{area_label} ({area_key})", expanded=(area_key == "A")):
+            com = st.number_input(
+                f"{area_key} - COMUNICACIÓN",
+                min_value=0.0,
+                max_value=100.0,
+                value=float(defaults.get("COMUNICACIÓN", 0)),
+                step=1.0,
+            )
+            hab = st.number_input(
+                f"{area_key} - HABILIDADES COMUNICATIVAS",
+                min_value=0.0,
+                max_value=100.0,
+                value=float(defaults.get("HABILIDADES COMUNICATIVAS", 0)),
+                step=1.0,
+            )
+            mat = st.number_input(
+                f"{area_key} - MATEMÁTICA",
+                min_value=0.0,
+                max_value=100.0,
+                value=float(defaults.get("MATEMÁTICA", 0)),
+                step=1.0,
+            )
+            cta = st.number_input(
+                f"{area_key} - CTA/CCSS",
+                min_value=0.0,
+                max_value=100.0,
+                value=float(defaults.get("CTA/CCSS", 0)),
+                step=1.0,
+            )
+
+        area_cfg[area_key] = {
+            "COMUNICACIÓN": com,
+            "HABILIDADES COMUNICATIVAS": hab,
+            "MATEMÁTICA": mat,
+            "CTA/CCSS": cta,
+        }
+
     
 
 col1, col2 = st.columns([1,1])
@@ -128,6 +198,7 @@ st.markdown("---")
 
 
 # --- Botón principal ---
+# --- Botón principal ---
 run = st.button("🚀 Generar Excel (RESULTADOS + RESUMEN)", type="primary")
 
 if run:
@@ -142,6 +213,9 @@ if run:
     if not quiz_map:
         st.error("Debes ingresar un **Mapa quiz→Área** válido (ej. 11907=A,11908=B).")
         st.stop()
+
+    # Convertimos el umbral de % a decimal (0.30)
+    nivel_threshold = nivel_threshold_pct / 100.0
 
     try:
         # Parseo de entradas
@@ -206,7 +280,12 @@ if run:
         fname = f"RESULTADOS_ADMISION_{exam_date}.xlsx"
         with tempfile.TemporaryDirectory() as td:
             out_path = Path(td) / fname
-            core.write_excel_all_in_one(out_path, rows)
+            core.write_excel_all_in_one(
+                out_path,
+                rows,
+                criteria_by_area=area_cfg,
+                nivel_threshold=nivel_threshold,
+            )
             data = out_path.read_bytes()
 
         st.download_button(
@@ -221,3 +300,6 @@ if run:
 
     except Exception as e:
         st.error(f"❌ Ocurrió un error: {e}")
+
+
+
