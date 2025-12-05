@@ -389,6 +389,18 @@ if convertir:
 
         df_resultados = pd.read_excel(xlsx, sheet_name="RESULTADOS")
         df_resumen = pd.read_excel(xlsx, sheet_name="RESUMEN")
+                # Detectar columna de Código de Matrícula en RESUMEN
+        cod_cols = [
+            c for c in df_resumen.columns
+            if "código" in c.lower() and "matr" in c.lower()
+        ]
+        if cod_cols:
+            cod_col = cod_cols[0]
+            codigo_estudiante = df_resumen[cod_col].astype(str).fillna("")
+        else:
+            # Si no hay columna, se deja vacío pero con el mismo largo
+            codigo_estudiante = pd.Series([""] * len(df_resumen))
+
 
         # 2) DNI como texto
         df_resultados["Numero de DNI"] = df_resultados["Numero de DNI"].astype(str)
@@ -432,13 +444,6 @@ if convertir:
             lambda x: "SI" if x.strip().upper() == "REQUIERE NIVELACIÓN" else "NO"
         )
 
-         # Código de estudiante (si viene del Excel, lo usamos)
-        if "Código de Matrícula" in merged.columns:
-            # Serie del mismo largo que merged
-            codigo_estudiante = merged["Código de Matrícula"].astype(str).fillna("")
-        else:
-            # Serie vacía del mismo largo (para evitar que quede solo un string)
-            codigo_estudiante = pd.Series([""] * len(merged))
         # 6) Formar DataFrame final
         out_df = pd.DataFrame(
             {
@@ -451,7 +456,6 @@ if convertir:
                 "area": merged["Área"],
                 "programa": merged["Programa Académico"],
                 "local_examen": merged["Sede o Filial"],
-                "modalidad_examen": "",
                 "puntaje": merged["TOTAL"].astype(int),
                 "asistio": merged["Asistencia"],
                 "condicion": merged["CONDICIÓN"],
