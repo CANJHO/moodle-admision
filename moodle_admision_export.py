@@ -408,7 +408,7 @@ def write_excel_all_in_one(
 
         # Si al menos un curso requiere nivelación, marcamos el programa
         requiere_nivel = any([com_nivel, hab_nivel, mat_nivel, cta_nivel, ccss_nivel])
-        programa_nivel = "REQUIERE NIVELACIÓN" if requiere_nivel else ""
+        programa_nivel = "SI" if requiere_nivel else "NO"
 
         resumen_rows.append({
             "Apellidos y nombres": f"{r.get('Apellido(s)','')} {r.get('Nombre','')}".strip(),
