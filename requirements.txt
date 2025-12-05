@@ -1,4 +1,4 @@
-streamlet
+streamlit
 requests
 pandas
 openpyxl
