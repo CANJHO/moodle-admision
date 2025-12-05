@@ -6,6 +6,8 @@ from datetime import datetime
 from io import BytesIO
 import tempfile
 import time
+import json
+import pandas as pd
 
 # Importamos tu lógica existente desde el script CLI
 import moodle_admision_export as core
@@ -339,3 +341,141 @@ if run:
 
     except Exception as e:
         st.error(f"❌ Ocurrió un error: {e}")
+
+# =====================================================================
+# 📂 CONVERSOR A FORMATO BD (postulantes_convertidos.xlsx)
+# =====================================================================
+st.markdown("---")
+st.header("📂 Conversor a formato BD")
+
+st.write(
+    "Usa esta sección para tomar el Excel generado (hojas **RESULTADOS** y **RESUMEN**) "
+    "y convertirlo al formato final para subir a la base de datos."
+)
+
+uploaded_file = st.file_uploader(
+    "Sube el Excel con las hojas RESULTADOS y RESUMEN",
+    type=["xlsx"],
+    key="conv_excel",
+)
+
+col1, col2 = st.columns(2)
+with col1:
+    periodo_value = st.text_input("Periodo", value="2026-1")
+with col2:
+    fecha_registro_value = st.text_input(
+        "Fecha de registro (AAAA-MM-DD hh:mm:ss)",
+        value="2025-11-29 00:00:00",
+    )
+
+convertir = st.button("🔄 Convertir a plantilla BD")
+
+if convertir:
+    if uploaded_file is None:
+        st.error("Primero sube el archivo Excel generado (RESULTADOS + RESUMEN).")
+        st.stop()
+
+    try:
+        # 1) Leer el Excel y validar hojas
+        xlsx = pd.ExcelFile(uploaded_file)
+        hojas = xlsx.sheet_names
+
+        if "RESULTADOS" not in hojas or "RESUMEN" not in hojas:
+            st.error(
+                "❌ El archivo no contiene las hojas necesarias: 'RESULTADOS' y 'RESUMEN'. "
+                f"Hojas encontradas: {hojas}"
+            )
+            st.stop()
+
+        df_resultados = pd.read_excel(xlsx, sheet_name="RESULTADOS")
+        df_resumen = pd.read_excel(xlsx, sheet_name="RESUMEN")
+
+        # 2) DNI como texto
+        df_resultados["Numero de DNI"] = df_resultados["Numero de DNI"].astype(str)
+        df_resumen["DNI"] = df_resumen["DNI"].astype(str)
+
+        # 3) Combinar datos por DNI (apellidos, nombres, código de matrícula si existe)
+        base_cols = ["Apellido(s)", "Nombre", "Numero de DNI"]
+        if "Código de Matrícula" in df_resultados.columns:
+            base_cols.append("Código de Matrícula")
+
+        df_small = df_resultados[base_cols].copy()
+        merged = df_resumen.merge(
+            df_small,
+            left_on="DNI",
+            right_on="Numero de DNI",
+            how="left",
+        )
+
+        # 4) Construir JSON de cursos que requieren nivelación
+        course_cols = {
+            "COMUNICACIÓN.1": "COMUNICACIÓN",
+            "HABILIDADES COMUNICATIVAS.1": "HABILIDADES COMUNICATIVAS",
+            "MATEMATICA": "MATEMATICA",
+            "CIENCIA, TECNOLOGÍA Y AMBIENTE.1": "CIENCIA, TECNOLOGÍA Y AMBIENTE",
+            "CIENCIAS SOCIALES": "CIENCIAS SOCIALES",
+        }
+
+        def build_json_courses(row):
+            cursos = []
+            for col, nombre in course_cols.items():
+                val = row.get(col)
+                if isinstance(val, str) and val.strip() != "":
+                    cursos.append({"curso": nombre})
+            return json.dumps(cursos, ensure_ascii=False)
+
+        areas_nivelacion = merged.apply(build_json_courses, axis=1)
+
+        # 5) Requiere nivelación (SI / NO) según PROGRAMA DE NIVELACIÓN
+        req = merged["PROGRAMA DE NIVELACIÓN"].fillna("").astype(str)
+        requiere_nivelacion = req.apply(
+            lambda x: "SI" if x.strip().upper() == "REQUIERE NIVELACIÓN" else "NO"
+        )
+
+        # Código de estudiante (si viene del Excel, lo usamos)
+        if "Código de Matrícula" in merged.columns:
+            codigo_estudiante = merged["Código de Matrícula"].fillna("").astype(str)
+        else:
+            codigo_estudiante = ""
+
+        # 6) Formar DataFrame final
+        out_df = pd.DataFrame(
+            {
+                "id": None,
+                "periodo": periodo_value,
+                "codigo_estudiante": codigo_estudiante,
+                "apellidos": merged["Apellido(s)"],
+                "nombres": merged["Nombre"],
+                "dni": merged["DNI"].astype(str),
+                "area": merged["Área"],
+                "programa": merged["Programa Académico"],
+                "local_examen": merged["Sede o Filial"],
+                "modalidad_examen": "",
+                "puntaje": merged["TOTAL"].astype(int),
+                "asistio": merged["Asistencia"],
+                "condicion": merged["CONDICIÓN"],
+                "requiere_nivelacion": requiere_nivelacion,
+                "areas_nivelacion": areas_nivelacion,
+                "fecha_registro": fecha_registro_value,
+                "estado": 1,
+            }
+        )
+
+        # 7) Generar Excel en memoria y ofrecer descarga
+        buffer = BytesIO()
+        out_df.to_excel(buffer, index=False)
+        buffer.seek(0)
+
+        st.success("🎉 Archivo de postulantes convertido correctamente.")
+        st.download_button(
+            label="⬇️ Descargar archivo para BD (postulantes_convertidos.xlsx)",
+            data=buffer,
+            file_name="postulantes_convertidos.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+        st.dataframe(out_df.head())
+
+    except Exception as e:
+        st.error(f"❌ Ocurrió un error durante la conversión: {e}")
+        st.stop()
