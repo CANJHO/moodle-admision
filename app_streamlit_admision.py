@@ -432,12 +432,13 @@ if convertir:
             lambda x: "SI" if x.strip().upper() == "REQUIERE NIVELACIÓN" else "NO"
         )
 
-        # Código de estudiante (si viene del Excel, lo usamos)
+         # Código de estudiante (si viene del Excel, lo usamos)
         if "Código de Matrícula" in merged.columns:
-            codigo_estudiante = merged["Código de Matrícula"].fillna("").astype(str)
+            # Serie del mismo largo que merged
+            codigo_estudiante = merged["Código de Matrícula"].astype(str).fillna("")
         else:
-            codigo_estudiante = ""
-
+            # Serie vacía del mismo largo (para evitar que quede solo un string)
+            codigo_estudiante = pd.Series([""] * len(merged))
         # 6) Formar DataFrame final
         out_df = pd.DataFrame(
             {
