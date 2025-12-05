@@ -224,158 +224,123 @@ st.markdown("---")
 run = st.button("🚀 Generar Excel (RESULTADOS + RESUMEN)", type="primary")
 
 if run:
+    # Validaciones básicas
     if not exam_date:
         st.error("Debes elegir la **Fecha** del examen.")
         st.stop()
     if not course_ids_str.strip():
         st.error("Debes ingresar al menos un **ID de curso**.")
         st.stop()
-
     quiz_map = core.parse_quiz_map(quiz_map_str)
     if not quiz_map:
         st.error("Debes ingresar un **Mapa quiz→Área** válido (ej. 11907=A,11908=B).")
         st.stop()
 
-    # Umbrales de nivelación (de la barra lateral)
-    nivel_threshold_base = nivel_threshold_pct / 100.0
-    nivel_por_area = {
-        area: {sub: val / 100.0 for sub, val in subdict.items()}
-        for area, subdict in nivel_por_area_pct.items()
-    }
+    # Convertimos el umbral global de % a decimal (0.30)
+    nivel_threshold = nivel_threshold_pct / 100.0
 
     try:
-        # --------- AQUÍ va todo tu código que construye 'rows' ---------
-        # (cursos, quizzes, usuarios, _process_user_quiz, etc.)
-        # Debes dejarlo igual que ya lo tenías.
-        # ---------------------------------------------------------------
+        # Parseo de entradas
+        course_ids = [int(x) for x in course_ids_str.split(",") if x.strip()]
+        t_from, t_to, tz = core.day_range_epoch(exam_date.isoformat(), tz_offset)
 
+        # Info inicial
+        st.info(f"Cursos: {course_ids} | Día: {exam_date} (tz {tz_offset})")
+        st.info(f"Quiz→Área: {quiz_map}")
+
+        # Descubrir quizzes y quedarnos solo con los del mapa
+        with st.status("🔁 Descubriendo quizzes…", expanded=False) as status:
+            quizzes = core.discover_quizzes(base_url, TOKEN, course_ids)
+            qids_in_cursos = {q["quizid"] for q in quizzes}
+            target_qids = [qid for qid in quiz_map.keys() if qid in qids_in_cursos]
+            target_quizzes = [q for q in quizzes if q["quizid"] in target_qids]
+            status.update(
+                label=f"Quizzes a procesar: {len(target_quizzes)}",
+                state="complete",
+            )
+
+        # Usuarios por curso
+        course_users = {}
+        total_users = 0
+        prog_bar = st.progress(0, text="Cargando usuarios por curso…")
+        for i, cid in enumerate(course_ids, start=1):
+            us = core.get_course_users(
+                base_url,
+                TOKEN,
+                cid,
+                only_roles=[x.strip() for x in only_roles.split(",") if x.strip()],
+            )
+            course_users[cid] = us
+            total_users += len(us)
+            prog_bar.progress(i / len(course_ids), text=f"Curso {cid}: {len(us)} usuarios")
+        prog_bar.empty()
+
+        if total_users == 0 or not target_quizzes:
+            st.warning("Nada para procesar (sin usuarios o sin quizzes objetivo).")
+            st.stop()
+
+        # Procesar intentos
+        st.write("⚙️ Procesando intentos (esto puede tardar)…")
+        t0 = time.time()
+        rows = []
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        futs = []
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            for q in target_quizzes:
+                area_letter = quiz_map.get(q["quizid"])
+                users = course_users.get(q["courseid"], [])
+                for u in users:
+                    futs.append(
+                        ex.submit(
+                            core._process_user_quiz,
+                            base_url,
+                            TOKEN,
+                            q,
+                            area_letter,
+                            u,
+                            t_from,
+                            t_to,
+                            tz,
+                        )
+                    )
+            done = 0
+            step_bar = st.progress(0.0)
+            for fut in as_completed(futs):
+                res = fut.result()
+                if res:
+                    rows.extend(res)
+                done += 1
+                step_bar.progress(done / max(1, len(futs)))
+        step_bar.empty()
+
+        st.success(f"Intentos dentro del día: {len(rows)}")
+        if not rows:
+            st.warning("No se encontraron intentos ese día.")
+            st.stop()
+
+        # Generar Excel en memoria y ofrecer descarga
         fname = f"RESULTADOS_ADMISION_{exam_date}.xlsx"
-
         with tempfile.TemporaryDirectory() as td:
             out_path = Path(td) / fname
-
-            # 1) Generar Excel RESULTADOS + RESUMEN
             core.write_excel_all_in_one(
                 out_path,
                 rows,
-                nivel_threshold_base=nivel_threshold_base,
-                nivel_by_area=nivel_por_area,
+                nivel_threshold_base=nivel_threshold,  # usa la lógica ≤ 30% para nivelación
             )
-
-            # Bytes del Excel principal
-            excel_data = out_path.read_bytes()
-
-            # 2) LEER el Excel generado para armar LA PLANTILLA BD
-            xlsx = pd.ExcelFile(out_path)
-            df_resultados = pd.read_excel(xlsx, sheet_name="RESULTADOS")
-            df_resumen = pd.read_excel(xlsx, sheet_name="RESUMEN")
-
-            # DNI como texto
-            df_resultados["Numero de DNI"] = df_resultados["Numero de DNI"].astype(str)
-            df_resumen["DNI"] = df_resumen["DNI"].astype(str)
-
-            # Combinar por DNI para traer apellidos/nombres
-            df_small = df_resultados[["Apellido(s)", "Nombre", "Numero de DNI"]].copy()
-            merged = df_resumen.merge(
-                df_small,
-                left_on="DNI",
-                right_on="Numero de DNI",
-                how="left",
-            )
-
-            # Detectar columna de Código de Matrícula en RESUMEN
-            cod_cols = [
-                c
-                for c in df_resumen.columns
-                if "código" in c.lower() and "matr" in c.lower()
-            ]
-            if cod_cols:
-                cod_col = cod_cols[0]
-                codigo_estudiante = df_resumen[cod_col].astype(str).fillna("")
-            else:
-                codigo_estudiante = pd.Series([""] * len(df_resumen))
-
-            # Construir JSON de cursos que requieren nivelación
-            course_cols = {
-                "COMUNICACIÓN.1": "COMUNICACIÓN",
-                "HABILIDADES COMUNICATIVAS.1": "HABILIDADES COMUNICATIVAS",
-                "MATEMATICA": "MATEMATICA",
-                "CIENCIA, TECNOLOGÍA Y AMBIENTE.1": "CIENCIA, TECNOLOGÍA Y AMBIENTE",
-                "CIENCIAS SOCIALES": "CIENCIAS SOCIALES",
-            }
-
-            def build_json_courses(row):
-                cursos = []
-                for col, nombre in course_cols.items():
-                    val = row.get(col)
-                    if isinstance(val, str) and val.strip() != "":
-                        cursos.append({"curso": nombre})
-                return json.dumps(cursos, ensure_ascii=False)
-
-            areas_nivelacion = merged.apply(build_json_courses, axis=1)
-
-            # Requiere nivelación (SI / NO) según PROGRAMA DE NIVELACIÓN
-            req = merged["PROGRAMA DE NIVELACIÓN"].fillna("").astype(str)
-            requiere_nivelacion = req.apply(
-                lambda x: "SI" if x.strip().upper() == "REQUIERE NIVELACIÓN" else "NO"
-            )
-
-            # Valores fijos / podrías pasarlos a la UI si quieres
-            periodo_value = "2026-1"
-            fecha_registro_value = "2025-11-29 00:00:00"
-
-            # DataFrame final para BD
-            out_df = pd.DataFrame(
-                {
-                    "id": None,
-                    "periodo": periodo_value,
-                    "codigo_estudiante": codigo_estudiante,
-                    "apellidos": merged["Apellido(s)"],
-                    "nombres": merged["Nombre"],
-                    "dni": merged["DNI"].astype(str),
-                    "area": merged["Área"],
-                    "programa": merged["Programa Académico"],
-                    "local_examen": merged["Sede o Filial"],
-                    "modalidad_examen": "",
-                    "puntaje": merged["TOTAL"].astype(int),
-                    "asistio": merged["Asistencia"],
-                    "condicion": merged["CONDICIÓN"],
-                    "requiere_nivelacion": requiere_nivelacion,
-                    "areas_nivelacion": areas_nivelacion,
-                    "fecha_registro": fecha_registro_value,
-                    "estado": 1,
-                }
-            )
-
-            # Guardar plantilla BD en memoria
-            buffer_bd = BytesIO()
-            out_df.to_excel(buffer_bd, index=False)
-            buffer_bd.seek(0)
-
-        # --------- BOTONES DE DESCARGA ---------
-        st.success("Archivos generados correctamente.")
+            data = out_path.read_bytes()
 
         st.download_button(
             label="⬇️ Descargar Excel (RESULTADOS + RESUMEN)",
-            data=excel_data,
+            data=data,
             file_name=fname,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            help="Descarga el archivo generado",
         )
 
-        st.download_button(
-            label="⬇️ Descargar archivo para BD (postulantes_convertidos.xlsx)",
-            data=buffer_bd,
-            file_name="postulantes_convertidos.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-
-        # Vista rápida de la plantilla BD
-        st.dataframe(out_df.head())
+        st.caption(f"Tiempo total: {time.time() - t0:.1f} s")
 
     except Exception as e:
         st.error(f"❌ Ocurrió un error: {e}")
-        st.stop()
-
 
 # =====================================================================
 # 📂 CONVERSOR A FORMATO BD (postulantes_convertidos.xlsx)
