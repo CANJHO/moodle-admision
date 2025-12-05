@@ -41,6 +41,7 @@ TIMEOUT = 60
 CF_DNI = "DNI_CE"
 CF_PROG = "PROGRAMA_ACADEMICO"    # etiqueta salida: "Programa Académico"
 CF_SEDE = "SEDE_FILIAL"           # etiqueta salida: "Sede o Filial"
+CF_COD_MAT = "CODIGO_DE_MATRICULA"   # etiqueta salida: "Código de Matrícula"
 
 # -------- Áreas y sub-áreas (rangos P#) --------
 def r(a: int, b: int) -> List[int]:
@@ -231,12 +232,13 @@ def build_row_from_review(user: Dict[str,Any], quiz: Dict[str,Any], area_letter:
     programa = cf.get(CF_PROG, "") or cf.get(CF_PROG.upper(), "") or ""
     sede     = cf.get(CF_SEDE, "") or cf.get(CF_SEDE.upper(), "") or ""
     dni      = cf.get(CF_DNI, "") or ""
-
+    cod_mat  = cf.get(CF_COD_MAT, "") or cf.get(CF_COD_MAT.upper(), "") or ""
     base = {
         "Apellido(s)": user.get("lastname",""),
         "Nombre": user.get("firstname",""),
         "Dirección de correo": user.get("email",""),
         "Numero de DNI": dni,
+        "Código de Matrícula": cod_mat,
         "Programa Académico": programa,
         "Sede o Filial": sede,
         "Área": area_letter,
@@ -411,6 +413,7 @@ def write_excel_all_in_one(
         resumen_rows.append({
             "Apellidos y nombres": f"{r.get('Apellido(s)','')} {r.get('Nombre','')}".strip(),
             "DNI": r.get("Numero de DNI",""),
+            "Código de Matrícula": r.get("Código de Matrícula",""),
             "Programa Académico": r.get("Programa Académico",""),
             "Sede o Filial": r.get("Sede o Filial",""),
             "Área": area,
@@ -462,7 +465,7 @@ def write_excel_all_in_one(
 
     # Columnas ordenadas
     ordered_cols = [
-        "Apellidos y nombres","DNI","Programa Académico","Sede o Filial","Área","Asistencia",
+        "Apellidos y nombres","DNI","Código de Matrícula","Programa Académico","Sede o Filial","Área","Asistencia",
 
         "COMUNICACIÓN","CRITERIO (COM)","% (COM)",
         "HABILIDADES COMUNICATIVAS","CRITERIO (HAB)","% (HAB)",
