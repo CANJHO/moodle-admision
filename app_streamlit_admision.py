@@ -23,6 +23,30 @@ st.set_page_config(
 st.title("📤 Exportador de Admisión (Moodle)")
 st.caption("Genera el Excel (RESULTADOS + RESUMEN) en base a Fecha, Curso(s) y Mapa Quiz→Área.")
 
+def test_mysql_connection():
+    try:
+        conn = mysql.connector.connect(
+            host=st.secrets["mysql"]["host"],
+            user=st.secrets["mysql"]["user"],
+            password=st.secrets["mysql"]["password"],
+            database=st.secrets["mysql"]["database"],
+            port=st.secrets["mysql"]["port"]
+        )
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1;")
+        cursor.fetchone()
+
+        st.success("✅ Conexión MySQL exitosa")
+        conn.close()
+
+    except Exception as e:
+        st.error(f"❌ Error de conexión MySQL: {e}")
+
+# --- BOTÓN PARA PROBAR ---
+st.sidebar.markdown("### 🔌 Probar conexión MySQL")
+if st.sidebar.button("Probar conexión"):
+    test_mysql_connection()
+    
 # --- Secrets (token/base_url) ---
 try:
     TOKEN = st.secrets["TOKEN"]
@@ -488,26 +512,3 @@ if convertir:
 
 
 
-        def test_mysql_connection():
-            try:
-                conn = mysql.connector.connect(
-                    host=st.secrets["mysql"]["host"],
-                    user=st.secrets["mysql"]["user"],
-                    password=st.secrets["mysql"]["password"],
-                    database=st.secrets["mysql"]["database"],
-                    port=st.secrets["mysql"]["port"]
-                )
-                cursor = conn.cursor()
-                cursor.execute("SELECT 1;")
-                cursor.fetchone()
-
-                st.success("✅ Conexión MySQL exitosa")
-                conn.close()
-
-            except Exception as e:
-                st.error(f"❌ Error de conexión MySQL: {e}")
-
-        # --- BOTÓN PARA PROBAR ---
-        st.sidebar.markdown("### 🔌 Probar conexión MySQL")
-        if st.sidebar.button("Probar conexión"):
-            test_mysql_connection()
