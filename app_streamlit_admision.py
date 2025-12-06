@@ -8,6 +8,7 @@ import tempfile
 import time
 import json
 import pandas as pd
+import mysql.connector
 
 # Importamos tu lógica existente desde el script CLI
 import moodle_admision_export as core
@@ -484,29 +485,29 @@ if convertir:
     except Exception as e:
         st.error(f"❌ Ocurrió un error durante la conversión: {e}")
         st.stop()
-import mysql.connector
-import streamlit as st
 
-def test_mysql_connection():
-    try:
-        conn = mysql.connector.connect(
-            host=st.secrets["mysql"]["host"],
-            user=st.secrets["mysql"]["user"],
-            password=st.secrets["mysql"]["password"],
-            database=st.secrets["mysql"]["database"],
-            port=st.secrets["mysql"]["port"]
-        )
-        cursor = conn.cursor()
-        cursor.execute("SELECT 1;")
-        cursor.fetchone()
 
-        st.success("✅ Conexión MySQL exitosa")
-        conn.close()
 
-    except Exception as e:
-        st.error(f"❌ Error de conexión MySQL: {e}")
+        def test_mysql_connection():
+            try:
+                conn = mysql.connector.connect(
+                    host=st.secrets["mysql"]["host"],
+                    user=st.secrets["mysql"]["user"],
+                    password=st.secrets["mysql"]["password"],
+                    database=st.secrets["mysql"]["database"],
+                    port=st.secrets["mysql"]["port"]
+                )
+                cursor = conn.cursor()
+                cursor.execute("SELECT 1;")
+                cursor.fetchone()
 
-# --- BOTÓN PARA PROBAR ---
-st.sidebar.markdown("### 🔌 Probar conexión MySQL")
-if st.sidebar.button("Probar conexión"):
-    test_mysql_connection()
+                st.success("✅ Conexión MySQL exitosa")
+                conn.close()
+
+            except Exception as e:
+                st.error(f"❌ Error de conexión MySQL: {e}")
+
+        # --- BOTÓN PARA PROBAR ---
+        st.sidebar.markdown("### 🔌 Probar conexión MySQL")
+        if st.sidebar.button("Probar conexión"):
+            test_mysql_connection()
