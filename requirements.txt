@@ -3,3 +3,4 @@ requests
 pandas
 openpyxl
 python-dateutil
+mysql-connector-python
