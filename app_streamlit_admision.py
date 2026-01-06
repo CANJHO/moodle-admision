@@ -9,8 +9,9 @@ import time
 import json
 import pandas as pd
 
-# ✅ NUEVO: para normalizar textos y quitar tildes (clave para detectar "CÓDIGO DE ESTUDIANTE")
+# ✅ NUEVO: para normalizar textos y quitar tildes
 import unicodedata
+import re  # ✅ NUEVO: para detectar el código por patrón (A261000919)
 
 # Importamos tu lógica existente desde el script CLI
 import moodle_admision_export as core
@@ -90,7 +91,6 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("📊 Umbrales de nivelación por área y curso")
 
-    # (Quedan listos por si más adelante quieres usarlos; hoy no se pasan al core)
     nivel_por_area = {}
     for area_key, area_label in [
         ("A", "Área A – Ingenierías"),
@@ -222,7 +222,6 @@ if run:
         st.error("Debes ingresar un **Mapa quiz→Área** válido (ej. 11907=A,11908=B).")
         st.stop()
 
-    # Umbral global % → decimal
     nivel_threshold = nivel_threshold_pct / 100.0
 
     try:
@@ -290,7 +289,7 @@ if run:
             core.write_excel_all_in_one(
                 out_path,
                 rows,
-                nivel_threshold_base=nivel_threshold,  # <= 30% nivelación
+                nivel_threshold_base=nivel_threshold,
             )
             data = out_path.read_bytes()
 
@@ -359,11 +358,9 @@ with tab1:
             df_resultados = pd.read_excel(xlsx, sheet_name="RESULTADOS")
             df_resumen = pd.read_excel(xlsx, sheet_name="RESUMEN")
 
-            # DNI como texto
             df_resultados["Numero de DNI"] = df_resultados["Numero de DNI"].astype(str).str.strip()
             df_resumen["DNI"] = df_resumen["DNI"].astype(str).str.strip()
 
-            # Cruce REAL para codigo_estudiante desde RESULTADOS ("Código de Matrícula")
             base_cols = ["Apellido(s)", "Nombre", "Numero de DNI"]
             if "Código de Matrícula" in df_resultados.columns:
                 base_cols.append("Código de Matrícula")
@@ -382,7 +379,6 @@ with tab1:
             else:
                 codigo_estudiante = pd.Series([""] * len(merged))
 
-            # JSON de cursos nivelación
             course_cols = {
                 "COMUNICACIÓN.1": "COMUNICACIÓN",
                 "HABILIDADES COMUNICATIVAS.1": "HABILIDADES COMUNICATIVAS",
@@ -401,7 +397,6 @@ with tab1:
 
             areas_nivelacion = merged.apply(build_json_courses, axis=1)
 
-            # Requiere nivelación: acepta "SI" o "REQUIERE NIVELACIÓN"
             req = merged["PROGRAMA DE NIVELACIÓN"].fillna("").astype(str)
             requiere_nivelacion = req.apply(
                 lambda x: "SI" if x.strip().upper() in ("REQUIERE NIVELACIÓN", "REQUIERE NIVELACION", "SI") else "NO"
@@ -472,7 +467,6 @@ with tab2:
 
     convertir_com = st.button("🔄 Convertir archivo de comisión → Plantilla BD", key="btn_convertir_comision")
 
-    # ✅ MEJORADO: normaliza y quita tildes (CÓDIGO vs CODIGO)
     def _norm(s: str) -> str:
         s = str(s).strip().lower()
         s = unicodedata.normalize("NFKD", s)
@@ -488,6 +482,24 @@ with tab2:
                 return c
         return None
 
+    # ✅ NUEVO: si la columna se detecta pero viene VACÍA (por formato raro), buscamos por PATRÓN en los valores
+    def _detect_codigo_by_pattern(df: pd.DataFrame) -> str | None:
+        # patrón típico: A261000919 (1-3 letras + 6+ dígitos)
+        pat = re.compile(r"^[A-Z]{1,3}\d{6,}$")
+        best_col = None
+        best_hits = 0
+
+        for c in df.columns:
+            s = df[c].astype(str).fillna("").str.strip().str.upper()
+            # contamos hits reales
+            hits = s.apply(lambda x: 1 if pat.match(x) else 0).sum()
+            if hits > best_hits:
+                best_hits = hits
+                best_col = c
+
+        # exigimos mínimo hits para evitar falsos positivos
+        return best_col if best_hits >= 3 else None
+
     if convertir_com:
         if com_file is None:
             st.error("Primero sube el Excel de la comisión.")
@@ -500,7 +512,9 @@ with tab2:
                 st.stop()
 
             sheet = xlsx.sheet_names[0]
-            df = pd.read_excel(xlsx, sheet_name=sheet)
+
+            # ✅ IMPORTANTE: leer todo como texto para no perder códigos tipo A261000919
+            df = pd.read_excel(xlsx, sheet_name=sheet, dtype=str)
 
             if df.empty:
                 st.error("La hoja está vacía.")
@@ -516,16 +530,16 @@ with tab2:
             col_cond = _find_col(df, ["condic"])
             col_prog_niv = _find_col(df, ["programa", "nivel"]) or _find_col(df, ["nivelacion"])
 
-            # ✅ MEJORADO: detectar CODIGO DE ESTUDIANTE (y variantes)
+            # detectar codigo de estudiante por nombre
             col_cod = (
                 _find_col(df, ["codigo", "estudiante"]) or
                 _find_col(df, ["cod", "estudiante"]) or
+                _find_col(df, ["codigo", "alumno"]) or
+                _find_col(df, ["cod", "alumno"]) or
                 _find_col(df, ["codigo", "matricula"]) or
                 _find_col(df, ["cod", "matr"]) or
-                _find_col(df, ["codigo", "mat"]) or
                 _find_col(df, ["matric"]) or
-                _find_col(df, ["matricula"]) or
-                _find_col(df, ["codigo"])
+                _find_col(df, ["matricula"])
             )
 
             faltantes = []
@@ -541,19 +555,36 @@ with tab2:
                 st.info(f"Columnas encontradas en la hoja '{sheet}': {list(df.columns)}")
                 st.stop()
 
-            # ✅ debug útil (puedes quitarlo después)
-            st.info(f"Columna detectada para codigo_estudiante: {col_cod}")
+            # normalizaciones base
+            dni = df[col_dni].astype(str).fillna("").str.strip()
+            apellidos = df[col_ap].astype(str).fillna("").str.strip()
+            nombres = df[col_nom].astype(str).fillna("").str.strip()
+            area = df[col_area].astype(str).fillna("").str.strip()
+            programa = df[col_prog].astype(str).fillna("").str.strip()
 
-            dni = df[col_dni].astype(str).str.strip()
-            apellidos = df[col_ap].astype(str).str.strip()
-            nombres = df[col_nom].astype(str).str.strip()
-            area = df[col_area].astype(str).str.strip()
-            programa = df[col_prog].astype(str).str.strip()
+            # total/puntaje a número
             puntaje = pd.to_numeric(df[col_total], errors="coerce").fillna(0).astype(int)
 
-            asistio = df[col_asist].astype(str).str.strip() if col_asist else "ASISTIÓ"
-            condicion = df[col_cond].astype(str).str.strip() if col_cond else ""
-            codigo_estudiante = df[col_cod].astype(str).fillna("").str.strip() if col_cod else ""
+            asistio = df[col_asist].astype(str).fillna("").str.strip() if col_asist else "ASISTIÓ"
+            condicion = df[col_cond].astype(str).fillna("").str.strip() if col_cond else ""
+
+            # --- codigo_estudiante (aquí está el FIX real) ---
+            if col_cod:
+                codigo_estudiante = df[col_cod].astype(str).fillna("").str.strip()
+            else:
+                codigo_estudiante = pd.Series([""] * len(df))
+
+            # ✅ Si sale casi todo vacío, buscamos por patrón de valores (A261000919)
+            empty_ratio = (codigo_estudiante == "").mean() if len(codigo_estudiante) else 1.0
+            if empty_ratio >= 0.95:
+                col_cod_pat = _detect_codigo_by_pattern(df)
+                if col_cod_pat:
+                    codigo_estudiante = df[col_cod_pat].astype(str).fillna("").str.strip()
+                    st.info(f"✅ Código detectado por patrón en columna: {col_cod_pat}")
+                else:
+                    st.warning("⚠️ No pude detectar el código por patrón. Se quedará vacío.")
+            else:
+                st.info(f"✅ Código detectado por nombre de columna: {col_cod}")
 
             if col_prog_niv:
                 raw = df[col_prog_niv].fillna("").astype(str)
@@ -609,7 +640,7 @@ with tab2:
                 "dni": dni,
                 "area": area,
                 "programa": programa,
-                "local_examen": df[col_sede].astype(str).str.strip() if col_sede else "",
+                "local_examen": df[col_sede].astype(str).fillna("").str.strip() if col_sede else "",
                 "puntaje": puntaje,
                 "asistio": asistio,
                 "condicion": condicion,
