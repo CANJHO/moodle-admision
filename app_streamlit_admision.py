@@ -373,6 +373,345 @@ if run:
 st.markdown("---")
 st.header("📂 Conversor a formato BD")
 
+tab1, tab2 = st.tabs(["✅ Desde Excel Moodle (RESULTADOS/RESUMEN)", "📤 Archivo de la comisión"])
+
+# ==========================================================
+# TAB 1: Tu conversor actual (NO CAMBIA la lógica base)
+# ==========================================================
+with tab1:
+    st.write(
+        "Usa esta sección para tomar el Excel generado (hojas **RESULTADOS** y **RESUMEN**) "
+        "y convertirlo al formato final para subir a la base de datos."
+    )
+
+    uploaded_file = st.file_uploader(
+        "Sube el Excel con las hojas RESULTADOS y RESUMEN",
+        type=["xlsx"],
+        key="conv_excel",
+    )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        periodo_value = st.text_input("Periodo", value="2026-1", key="periodo_moodle")
+    with col2:
+        fecha_registro_value = st.text_input(
+            "Fecha de registro (AAAA-MM-DD hh:mm:ss)",
+            value="2025-11-29 00:00:00",
+            key="fecha_moodle",
+        )
+
+    convertir = st.button("🔄 Convertir a plantilla BD", key="btn_convertir_moodle")
+
+    if convertir:
+        if uploaded_file is None:
+            st.error("Primero sube el archivo Excel generado (RESULTADOS + RESUMEN).")
+            st.stop()
+
+        try:
+            # 1) Leer el Excel y validar hojas
+            xlsx = pd.ExcelFile(uploaded_file)
+            hojas = xlsx.sheet_names
+
+            if "RESULTADOS" not in hojas or "RESUMEN" not in hojas:
+                st.error(
+                    "❌ El archivo no contiene las hojas necesarias: 'RESULTADOS' y 'RESUMEN'. "
+                    f"Hojas encontradas: {hojas}"
+                )
+                st.stop()
+
+            df_resultados = pd.read_excel(xlsx, sheet_name="RESULTADOS")
+            df_resumen = pd.read_excel(xlsx, sheet_name="RESUMEN")
+
+            # --- Código estudiante (CRUCE REAL con RESULTADOS) ---
+            # 2) DNI como texto
+            df_resultados["Numero de DNI"] = df_resultados["Numero de DNI"].astype(str)
+            df_resumen["DNI"] = df_resumen["DNI"].astype(str)
+
+            # 3) Tomar base desde RESULTADOS (incluye Código de Matrícula si existe)
+            base_cols = ["Apellido(s)", "Nombre", "Numero de DNI"]
+            if "Código de Matrícula" in df_resultados.columns:
+                base_cols.append("Código de Matrícula")
+
+            df_small = df_resultados[base_cols].copy()
+
+            merged = df_resumen.merge(
+                df_small,
+                left_on="DNI",
+                right_on="Numero de DNI",
+                how="left",
+            )
+
+            # 4) codigo_estudiante: se llena desde 'Código de Matrícula' si existe
+            if "Código de Matrícula" in merged.columns:
+                codigo_estudiante = merged["Código de Matrícula"].astype(str).fillna("")
+            else:
+                codigo_estudiante = pd.Series([""] * len(merged))
+
+            # 5) JSON de cursos nivelación
+            course_cols = {
+                "COMUNICACIÓN.1": "COMUNICACIÓN",
+                "HABILIDADES COMUNICATIVAS.1": "HABILIDADES COMUNICATIVAS",
+                "MATEMATICA": "MATEMATICA",
+                "CIENCIA, TECNOLOGÍA Y AMBIENTE.1": "CIENCIA, TECNOLOGÍA Y AMBIENTE",
+                "CIENCIAS SOCIALES": "CIENCIAS SOCIALES",
+            }
+
+            def build_json_courses(row):
+                cursos = []
+                for col, nombre in course_cols.items():
+                    val = row.get(col)
+                    if isinstance(val, str) and val.strip() != "":
+                        cursos.append({"curso": nombre})
+                return json.dumps(cursos, ensure_ascii=False)
+
+            areas_nivelacion = merged.apply(build_json_courses, axis=1)
+
+            # 6) Requiere nivelación (SI / NO)
+            req = merged["PROGRAMA DE NIVELACIÓN"].fillna("").astype(str)
+            requiere_nivelacion = req.apply(
+                lambda x: "SI" if x.strip().upper() in ("REQUIERE NIVELACIÓN", "SI") else "NO"
+            )
+
+            # 7) Formar DataFrame final (plantilla BD)
+            out_df = pd.DataFrame(
+                {
+                    "id": None,
+                    "periodo": periodo_value,
+                    "codigo_estudiante": codigo_estudiante,
+                    "apellidos": merged["Apellido(s)"],
+                    "nombres": merged["Nombre"],
+                    "dni": merged["DNI"].astype(str),
+                    "area": merged["Área"],
+                    "programa": merged["Programa Académico"],
+                    "local_examen": merged["Sede o Filial"],
+                    "puntaje": merged["TOTAL"].astype(int),
+                    "asistio": merged["Asistencia"],
+                    "condicion": merged["CONDICIÓN"],
+                    "requiere_nivelacion": requiere_nivelacion,
+                    "areas_nivelacion": areas_nivelacion,
+                    "fecha_registro": fecha_registro_value,
+                    "estado": 1,
+                }
+            )
+
+            buffer = BytesIO()
+            out_df.to_excel(buffer, index=False)
+            buffer.seek(0)
+
+            st.success("🎉 Archivo convertido correctamente (Moodle → BD).")
+            st.download_button(
+                label="⬇️ Descargar archivo para BD (postulantes_convertidos.xlsx)",
+                data=buffer,
+                file_name="postulantes_convertidos.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+            st.dataframe(out_df.head())
+
+        except Exception as e:
+            st.error(f"❌ Ocurrió un error durante la conversión: {e}")
+            st.stop()
+
+
+# ==========================================================
+# TAB 2: Archivo de la comisión (cualquier nombre y hoja)
+# ==========================================================
+with tab2:
+    st.write(
+        "📤 **Subir archivo de la comisión (Cuadro de ingresantes / resultados / nivelación)**.\n\n"
+        "- El archivo puede tener cualquier nombre.\n"
+        "- La hoja puede tener cualquier nombre.\n"
+        "- Se transformará al mismo formato BD (sin agregar columnas)."
+    )
+
+    com_file = st.file_uploader(
+        "📤 Subir archivo de la comisión (Excel)",
+        type=["xlsx"],
+        key="comision_excel",
+    )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        periodo_value_com = st.text_input("Periodo", value="2026-1", key="periodo_comision")
+    with col2:
+        fecha_registro_value_com = st.text_input(
+            "Fecha de registro (AAAA-MM-DD hh:mm:ss)",
+            value="2025-11-29 00:00:00",
+            key="fecha_comision",
+        )
+
+    convertir_com = st.button("🔄 Convertir archivo de comisión → Plantilla BD", key="btn_convertir_comision")
+
+    def _norm(s: str) -> str:
+        return "".join(ch for ch in str(s).strip().lower() if ch.isalnum())
+
+    def _find_col(df: pd.DataFrame, keywords: list[str]) -> str | None:
+        # busca por coincidencia flexible en nombres de columna
+        cols = list(df.columns)
+        ncols = {c: _norm(c) for c in cols}
+        for c, nc in ncols.items():
+            if all(k in nc for k in keywords):
+                return c
+        return None
+
+    if convertir_com:
+        if com_file is None:
+            st.error("Primero sube el Excel de la comisión.")
+            st.stop()
+
+        try:
+            xlsx = pd.ExcelFile(com_file)
+            if not xlsx.sheet_names:
+                st.error("El archivo no contiene hojas.")
+                st.stop()
+
+            # 🔎 Leemos la primera hoja con datos (o la primera hoja directamente)
+            # Si quieres, luego lo mejoramos para elegir hoja en un selectbox.
+            sheet = xlsx.sheet_names[0]
+            df = pd.read_excel(xlsx, sheet_name=sheet)
+
+            if df.empty:
+                st.error("La hoja está vacía.")
+                st.stop()
+
+            # Detectar columnas típicas (flexible)
+            col_ap = _find_col(df, ["apell"]) or _find_col(df, ["apellido"])
+            col_nom = _find_col(df, ["nomb"])
+            col_dni = _find_col(df, ["dni"])
+            col_area = _find_col(df, ["area"])
+            col_prog = _find_col(df, ["carrera"]) or _find_col(df, ["programa"])
+            col_total = _find_col(df, ["total"]) or _find_col(df, ["puntaje"])
+            col_asist = _find_col(df, ["asist"])
+            col_cond = _find_col(df, ["condic"])
+
+            # Nivelación (puede venir como SI/NO o como cursos marcados)
+            col_prog_niv = _find_col(df, ["programa", "nivel"]) or _find_col(df, ["nivelacion"])
+
+            # Código estudiante/matrícula (si viene)
+            col_cod = (
+                _find_col(df, ["cod", "matr"]) or
+                _find_col(df, ["codigo", "mat"]) or
+                _find_col(df, ["matric"])
+            )
+
+            faltantes = []
+            if not col_ap: faltantes.append("APELLIDOS")
+            if not col_nom: faltantes.append("NOMBRES")
+            if not col_dni: faltantes.append("DNI")
+            if not col_area: faltantes.append("AREA")
+            if not col_prog: faltantes.append("CARRERA/PROGRAMA")
+            if not col_total: faltantes.append("TOTAL/PUNTAJE")
+
+            if faltantes:
+                st.error(f"No pude detectar estas columnas necesarias: {', '.join(faltantes)}")
+                st.info(f"Columnas encontradas en la hoja '{sheet}': {list(df.columns)}")
+                st.stop()
+
+            # Normalizaciones
+            dni = df[col_dni].astype(str).str.strip()
+            apellidos = df[col_ap].astype(str).str.strip()
+            nombres = df[col_nom].astype(str).str.strip()
+            area = df[col_area].astype(str).str.strip()
+            programa = df[col_prog].astype(str).str.strip()
+
+            # total/puntaje a número
+            puntaje = pd.to_numeric(df[col_total], errors="coerce").fillna(0).astype(int)
+
+            asistio = df[col_asist].astype(str).str.strip() if col_asist else "ASISTIÓ"
+            condicion = df[col_cond].astype(str).str.strip() if col_cond else ""
+
+            # codigo estudiante opcional
+            codigo_estudiante = df[col_cod].astype(str).fillna("").str.strip() if col_cod else ""
+
+            # Requiere nivelación: si existe columna programa nivelación, interpretamos SI/NO / REQUIERE...
+            if col_prog_niv:
+                raw = df[col_prog_niv].fillna("").astype(str)
+                requiere_nivelacion = raw.apply(lambda x: "SI" if x.strip().upper() in ("SI", "REQUIERE NIVELACIÓN", "REQUIERE NIVELACION") else "NO")
+            else:
+                requiere_nivelacion = pd.Series(["NO"] * len(df))
+
+            # areas_nivelacion:
+            # si el archivo de comisión trae columnas por curso (COMUNICACIÓN, MATEMATICA, etc) lo convertimos a JSON
+            course_candidates = {
+                "COMUNICACIÓN": ["comunic"],
+                "HABILIDADES COMUNICATIVAS": ["habil", "comunic"],
+                "MATEMATICA": ["matemat"],
+                "CIENCIA, TECNOLOGÍA Y AMBIENTE": ["ciencia", "tecn"],
+                "CIENCIAS SOCIALES": ["ciencias", "social"],
+            }
+
+            # armamos lista de columnas detectadas para cada curso
+            detected_course_cols = {}
+            for curso, keys in course_candidates.items():
+                # intenta detectar columna que contenga esos tokens
+                # (en comisión puede venir como columna que dice el curso y valor SI/X/1/...)
+                best = None
+                for c in df.columns:
+                    nc = _norm(c)
+                    if all(k.replace("ó","o") in nc for k in [ _norm(k) for k in keys ]):
+                        best = c
+                        break
+                if best:
+                    detected_course_cols[curso] = best
+
+            def build_json_from_comision(row):
+                cursos = []
+                for curso, col in detected_course_cols.items():
+                    v = row.get(col)
+                    if isinstance(v, str) and v.strip() != "":
+                        cursos.append({"curso": curso})
+                    elif isinstance(v, (int, float)) and v != 0:
+                        cursos.append({"curso": curso})
+                return json.dumps(cursos, ensure_ascii=False)
+
+            if detected_course_cols:
+                areas_nivelacion = df.apply(build_json_from_comision, axis=1)
+            else:
+                # si no hay columnas por curso, dejamos json vacío
+                areas_nivelacion = pd.Series([json.dumps([], ensure_ascii=False)] * len(df))
+
+            out_df = pd.DataFrame({
+                "id": None,
+                "periodo": periodo_value_com,
+                "codigo_estudiante": codigo_estudiante,
+                "apellidos": apellidos,
+                "nombres": nombres,
+                "dni": dni,
+                "area": area,
+                "programa": programa,
+                "local_examen": df[_find_col(df, ["sede"])].astype(str).str.strip() if _find_col(df, ["sede"]) else "",
+                "puntaje": puntaje,
+                "asistio": asistio,
+                "condicion": condicion,
+                "requiere_nivelacion": requiere_nivelacion,
+                "areas_nivelacion": areas_nivelacion,
+                "fecha_registro": fecha_registro_value_com,
+                "estado": 1,
+            })
+
+            buffer = BytesIO()
+            out_df.to_excel(buffer, index=False)
+            buffer.seek(0)
+
+            st.success("🎉 Archivo de comisión convertido correctamente → Plantilla BD.")
+            st.download_button(
+                label="⬇️ Descargar archivo para BD (postulantes_convertidos.xlsx)",
+                data=buffer,
+                file_name="postulantes_convertidos.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+            st.dataframe(out_df.head())
+
+        except Exception as e:
+            st.error(f"❌ Error convirtiendo archivo de comisión: {e}")
+            st.stop()
+
+
+# =====================================================================
+# 📂 CONVERSOR A FORMATO BD (postulantes_convertidos.xlsx)
+# =====================================================================
+st.markdown("---")
+st.header("📂 Conversor a formato BD")
+
 st.write(
     "Usa esta sección para tomar el Excel generado (hojas **RESULTADOS** y **RESUMEN**) "
     "y convertirlo al formato final para subir a la base de datos."
