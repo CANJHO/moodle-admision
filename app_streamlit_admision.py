@@ -33,6 +33,56 @@ except Exception:
     st.error("No se encontraron los *Secrets*. Ve a Settings → Secrets y define TOKEN y BASE_URL.")
     st.stop()
 
+# =====================================================================
+# ✅ HELPERS (NUEVOS) - NO ROMPEN NADA, SOLO AYUDAN A DETECTAR COLUMNAS Y DNIs
+# =====================================================================
+
+def _norm_text(s: str) -> str:
+    """Normaliza texto: minus, sin tildes, solo alfanumérico."""
+    s = str(s).strip().lower()
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    return "".join(ch for ch in s if ch.isalnum())
+
+def _find_col_flexible(df: pd.DataFrame, keyword_groups):
+    """
+    Busca una columna por grupos de keywords.
+    keyword_groups: lista de listas. Retorna la primera columna que matchee algún grupo.
+    Ej:
+      [["codigo","matricula"], ["codigo","estudiante"], ["cod","matr"]]
+    """
+    cols = list(df.columns)
+    norm_cols = {c: _norm_text(c) for c in cols}
+
+    for group in keyword_groups:
+        g = [_norm_text(x) for x in group]
+        for c, nc in norm_cols.items():
+            if all(k in nc for k in g):
+                return c
+    return None
+
+def _norm_dni_value(v) -> str:
+    """
+    Normaliza DNI:
+    - convierte a string
+    - elimina '.0'
+    - deja solo dígitos
+    - rellena con 0 a la izquierda a 8 dígitos (clave para DNIs como 07489547)
+    """
+    s = "" if pd.isna(v) else str(v).strip()
+    if s.endswith(".0"):
+        s = s[:-2]
+    digits = "".join(ch for ch in s if ch.isdigit())
+    if digits == "":
+        return ""
+    # DNI en Perú suele ser 8
+    if len(digits) < 8:
+        digits = digits.zfill(8)
+    return digits
+
+def _norm_dni_series(ser: pd.Series) -> pd.Series:
+    return ser.apply(_norm_dni_value)
+
 # ---------------------------------------------------------------------
 # SIDEBAR
 # ---------------------------------------------------------------------
@@ -359,26 +409,90 @@ with tab1:
             df_resultados = pd.read_excel(xlsx, sheet_name="RESULTADOS")
             df_resumen = pd.read_excel(xlsx, sheet_name="RESUMEN")
 
-            # DNI como texto
-            df_resultados["Numero de DNI"] = df_resultados["Numero de DNI"].astype(str).str.strip()
-            df_resumen["DNI"] = df_resumen["DNI"].astype(str).str.strip()
+            # ==========================================================
+            # ✅ FIX REAL: detectar columnas y normalizar DNI (zfill 8)
+            # ==========================================================
 
-            # Cruce REAL para codigo_estudiante desde RESULTADOS ("Código de Matrícula")
-            base_cols = ["Apellido(s)", "Nombre", "Numero de DNI"]
-            if "Código de Matrícula" in df_resultados.columns:
-                base_cols.append("Código de Matrícula")
+            # Detectar columna DNI en RESULTADOS (por si cambia el nombre)
+            col_dni_res = None
+            if "Numero de DNI" in df_resultados.columns:
+                col_dni_res = "Numero de DNI"
+            else:
+                col_dni_res = _find_col_flexible(df_resultados, [
+                    ["numero", "dni"],
+                    ["dni"],
+                    ["documento", "dni"],
+                    ["nro", "dni"],
+                ])
 
-            df_small = df_resultados[base_cols].copy()
+            # Detectar columna DNI en RESUMEN
+            col_dni_sum = None
+            if "DNI" in df_resumen.columns:
+                col_dni_sum = "DNI"
+            else:
+                col_dni_sum = _find_col_flexible(df_resumen, [
+                    ["dni"],
+                    ["numero", "dni"],
+                    ["nro", "dni"],
+                ])
+
+            if not col_dni_res or not col_dni_sum:
+                st.error("No pude detectar la columna DNI en RESULTADOS o RESUMEN.")
+                st.info(f"Columnas RESULTADOS: {list(df_resultados.columns)}")
+                st.info(f"Columnas RESUMEN: {list(df_resumen.columns)}")
+                st.stop()
+
+            # ✅ Detectar columna de código: "Código de Matrícula" o "Código de Estudiante"
+            col_cod = None
+            # primero intentos exactos si existen
+            for exact in ["Código de Matrícula", "Codigo de Matricula", "CÓDIGO DE MATRÍCULA", "CODIGO DE MATRICULA",
+                          "Código de Estudiante", "Codigo de Estudiante", "CÓDIGO DE ESTUDIANTE", "CODIGO DE ESTUDIANTE"]:
+                if exact in df_resultados.columns:
+                    col_cod = exact
+                    break
+
+            # si no, flexible (tildes/guiones/underscore)
+            if not col_cod:
+                col_cod = _find_col_flexible(df_resultados, [
+                    ["codigo", "matricula"],
+                    ["codigo", "estudiante"],
+                    ["cod", "matr"],
+                    ["cod", "estud"],
+                    ["codigo"],  # último recurso
+                ])
+
+            if not col_cod:
+                st.warning("No encontré columna de CÓDIGO (MATRÍCULA/ESTUDIANTE) en RESULTADOS. Saldrá vacío.")
+                st.info(f"Columnas RESULTADOS: {list(df_resultados.columns)}")
+
+            # ✅ Normalizar DNI en ambos para que el merge funcione SIEMPRE (07489547 vs 7489547)
+            df_resultados["_dni_norm"] = _norm_dni_series(df_resultados[col_dni_res])
+            df_resumen["_dni_norm"] = _norm_dni_series(df_resumen[col_dni_sum])
+
+            # Armamos df_small con lo necesario
+            base_cols = ["Apellido(s)", "Nombre"]
+            # Si no existen esas columnas, igual seguimos pero avisamos
+            for col_needed in ["Apellido(s)", "Nombre"]:
+                if col_needed not in df_resultados.columns:
+                    st.warning(f"En RESULTADOS no existe la columna '{col_needed}'. Revisa el formato.")
+            cols_small = ["_dni_norm"]
+            if "Apellido(s)" in df_resultados.columns: cols_small.append("Apellido(s)")
+            if "Nombre" in df_resultados.columns: cols_small.append("Nombre")
+            if col_cod: cols_small.append(col_cod)
+
+            df_small = df_resultados[cols_small].copy()
 
             merged = df_resumen.merge(
                 df_small,
-                left_on="DNI",
-                right_on="Numero de DNI",
+                on="_dni_norm",
                 how="left",
             )
 
-            if "Código de Matrícula" in merged.columns:
-                codigo_estudiante = merged["Código de Matrícula"].astype(str).fillna("").str.strip()
+            # ✅ codigo_estudiante = codigo de matrícula / estudiante (misma cosa)
+            if col_cod and col_cod in merged.columns:
+                codigo_estudiante = merged[col_cod].astype(str).fillna("").str.strip()
+                # limpia "nan"
+                codigo_estudiante = codigo_estudiante.replace("nan", "")
             else:
                 codigo_estudiante = pd.Series([""] * len(merged))
 
@@ -402,24 +516,24 @@ with tab1:
             areas_nivelacion = merged.apply(build_json_courses, axis=1)
 
             # Requiere nivelación: acepta "SI" o "REQUIERE NIVELACIÓN"
-            req = merged["PROGRAMA DE NIVELACIÓN"].fillna("").astype(str)
+            req = merged["PROGRAMA DE NIVELACIÓN"].fillna("").astype(str) if "PROGRAMA DE NIVELACIÓN" in merged.columns else pd.Series([""] * len(merged))
             requiere_nivelacion = req.apply(
-                lambda x: "SI" if x.strip().upper() in ("REQUIERE NIVELACIÓN", "REQUIERE NIVELACION", "SI") else "NO"
+                lambda x: "SI" if str(x).strip().upper() in ("REQUIERE NIVELACIÓN", "REQUIERE NIVELACION", "SI") else "NO"
             )
 
             out_df = pd.DataFrame({
                 "id": None,
                 "periodo": periodo_value,
                 "codigo_estudiante": codigo_estudiante,
-                "apellidos": merged["Apellido(s)"],
-                "nombres": merged["Nombre"],
-                "dni": merged["DNI"].astype(str),
-                "area": merged["Área"],
-                "programa": merged["Programa Académico"],
-                "local_examen": merged["Sede o Filial"],
-                "puntaje": pd.to_numeric(merged["TOTAL"], errors="coerce").fillna(0).astype(int),
-                "asistio": merged["Asistencia"],
-                "condicion": merged["CONDICIÓN"],
+                "apellidos": merged["Apellido(s)"] if "Apellido(s)" in merged.columns else "",
+                "nombres": merged["Nombre"] if "Nombre" in merged.columns else "",
+                "dni": merged[col_dni_sum].apply(_norm_dni_value),  # DNI normalizado a 8
+                "area": merged["Área"] if "Área" in merged.columns else "",
+                "programa": merged["Programa Académico"] if "Programa Académico" in merged.columns else "",
+                "local_examen": merged["Sede o Filial"] if "Sede o Filial" in merged.columns else "",
+                "puntaje": pd.to_numeric(merged["TOTAL"], errors="coerce").fillna(0).astype(int) if "TOTAL" in merged.columns else 0,
+                "asistio": merged["Asistencia"] if "Asistencia" in merged.columns else "",
+                "condicion": merged["CONDICIÓN"] if "CONDICIÓN" in merged.columns else "",
                 "requiere_nivelacion": requiere_nivelacion,
                 "areas_nivelacion": areas_nivelacion,
                 "fecha_registro": fecha_registro_value,
@@ -437,6 +551,10 @@ with tab1:
                 file_name="postulantes_convertidos.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
+
+            # ✅ Debug útil: muestra cuántos códigos encontró
+            filled = (out_df["codigo_estudiante"].astype(str).str.strip() != "").sum()
+            st.info(f"Códigos de estudiante/matrícula encontrados: {filled} / {len(out_df)}")
             st.dataframe(out_df.head())
 
         except Exception as e:
@@ -541,7 +659,6 @@ with tab2:
                 st.info(f"Columnas encontradas en la hoja '{sheet}': {list(df.columns)}")
                 st.stop()
 
-            # ✅ debug útil (puedes quitarlo después)
             st.info(f"Columna detectada para codigo_estudiante: {col_cod}")
 
             dni = df[col_dni].astype(str).str.strip()
