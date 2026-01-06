@@ -9,6 +9,9 @@ import time
 import json
 import pandas as pd
 
+# ✅ NUEVO: para normalizar textos y quitar tildes (clave para detectar "CÓDIGO DE ESTUDIANTE")
+import unicodedata
+
 # Importamos tu lógica existente desde el script CLI
 import moodle_admision_export as core
 
@@ -469,14 +472,19 @@ with tab2:
 
     convertir_com = st.button("🔄 Convertir archivo de comisión → Plantilla BD", key="btn_convertir_comision")
 
+    # ✅ MEJORADO: normaliza y quita tildes (CÓDIGO vs CODIGO)
     def _norm(s: str) -> str:
-        return "".join(ch for ch in str(s).strip().lower() if ch.isalnum())
+        s = str(s).strip().lower()
+        s = unicodedata.normalize("NFKD", s)
+        s = "".join(ch for ch in s if not unicodedata.combining(ch))
+        return "".join(ch for ch in s if ch.isalnum())
 
     def _find_col(df: pd.DataFrame, keywords):
         cols = list(df.columns)
         ncols = {c: _norm(c) for c in cols}
+        k_norm = [_norm(k) for k in keywords]
         for c, nc in ncols.items():
-            if all(k in nc for k in keywords):
+            if all(k in nc for k in k_norm):
                 return c
         return None
 
@@ -508,10 +516,16 @@ with tab2:
             col_cond = _find_col(df, ["condic"])
             col_prog_niv = _find_col(df, ["programa", "nivel"]) or _find_col(df, ["nivelacion"])
 
+            # ✅ MEJORADO: detectar CODIGO DE ESTUDIANTE (y variantes)
             col_cod = (
+                _find_col(df, ["codigo", "estudiante"]) or
+                _find_col(df, ["cod", "estudiante"]) or
+                _find_col(df, ["codigo", "matricula"]) or
                 _find_col(df, ["cod", "matr"]) or
                 _find_col(df, ["codigo", "mat"]) or
-                _find_col(df, ["matric"])
+                _find_col(df, ["matric"]) or
+                _find_col(df, ["matricula"]) or
+                _find_col(df, ["codigo"])
             )
 
             faltantes = []
@@ -526,6 +540,9 @@ with tab2:
                 st.error(f"No pude detectar estas columnas necesarias: {', '.join(faltantes)}")
                 st.info(f"Columnas encontradas en la hoja '{sheet}': {list(df.columns)}")
                 st.stop()
+
+            # ✅ debug útil (puedes quitarlo después)
+            st.info(f"Columna detectada para codigo_estudiante: {col_cod}")
 
             dni = df[col_dni].astype(str).str.strip()
             apellidos = df[col_ap].astype(str).str.strip()
