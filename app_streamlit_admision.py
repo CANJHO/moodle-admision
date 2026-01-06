@@ -1,14 +1,13 @@
 # app_streamlit_admision.py
-# Interfaz Streamlit para tu exportador de Admisión
+# Interfaz Streamlit para tu exportador de Admisión (SIN BD / SIN MySQL)
+
 import streamlit as st
 from pathlib import Path
-from datetime import datetime
 from io import BytesIO
 import tempfile
 import time
 import json
 import pandas as pd
-import mysql.connector
 
 # Importamos tu lógica existente desde el script CLI
 import moodle_admision_export as core
@@ -23,30 +22,6 @@ st.set_page_config(
 st.title("📤 Exportador de Admisión (Moodle)")
 st.caption("Genera el Excel (RESULTADOS + RESUMEN) en base a Fecha, Curso(s) y Mapa Quiz→Área.")
 
-def test_mysql_connection():
-    try:
-        conn = mysql.connector.connect(
-            host=st.secrets["mysql"]["host"],
-            user=st.secrets["mysql"]["user"],
-            password=st.secrets["mysql"]["password"],
-            database=st.secrets["mysql"]["database"],
-            port=st.secrets["mysql"]["port"]
-        )
-        cursor = conn.cursor()
-        cursor.execute("SELECT 1;")
-        cursor.fetchone()
-
-        st.success("✅ Conexión MySQL exitosa")
-        conn.close()
-
-    except Exception as e:
-        st.error(f"❌ Error de conexión MySQL: {e}")
-
-# --- BOTÓN PARA PROBAR ---
-st.sidebar.markdown("### 🔌 Probar conexión MySQL")
-if st.sidebar.button("Probar conexión"):
-    test_mysql_connection()
-    
 # --- Secrets (token/base_url) ---
 try:
     TOKEN = st.secrets["TOKEN"]
@@ -99,8 +74,6 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("🧮 Nivelación")
 
-    # Umbral de nivelación en porcentaje (global).
-    # Se compara contra el % obtenido en cada curso (0–100).
     nivel_threshold_pct = st.number_input(
         "Umbral de nivelación (%)",
         min_value=0.0,
@@ -114,8 +87,7 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("📊 Umbrales de nivelación por área y curso")
 
-    # Estos controles son para ver/ajustar el umbral por curso y por área.
-    # De momento todos parten en 30% (igual al global) y se pueden ajustar si lo necesitas.
+    # (Quedan listos por si más adelante quieres usarlos; hoy no se pasan al core)
     nivel_por_area = {}
     for area_key, area_label in [
         ("A", "Área A – Ingenierías"),
@@ -125,34 +97,25 @@ with st.sidebar:
         with st.expander(f"{area_label} ({area_key})", expanded=(area_key == "A")):
             com_niv = st.number_input(
                 f"{area_key} - Umbral COMUNICACIÓN (%)",
-                min_value=0.0,
-                max_value=100.0,
-                value=nivel_threshold_pct,
-                step=1.0,
+                min_value=0.0, max_value=100.0,
+                value=nivel_threshold_pct, step=1.0,
             )
             hab_niv = st.number_input(
                 f"{area_key} - Umbral HABILIDADES COMUNICATIVAS (%)",
-                min_value=0.0,
-                max_value=100.0,
-                value=nivel_threshold_pct,
-                step=1.0,
+                min_value=0.0, max_value=100.0,
+                value=nivel_threshold_pct, step=1.0,
             )
             mat_niv = st.number_input(
                 f"{area_key} - Umbral MATEMÁTICA (%)",
-                min_value=0.0,
-                max_value=100.0,
-                value=nivel_threshold_pct,
-                step=1.0,
+                min_value=0.0, max_value=100.0,
+                value=nivel_threshold_pct, step=1.0,
             )
             cta_niv = st.number_input(
                 f"{area_key} - Umbral CTA / CCSS (%)",
-                min_value=0.0,
-                max_value=100.0,
-                value=nivel_threshold_pct,
-                step=1.0,
+                min_value=0.0, max_value=100.0,
+                value=nivel_threshold_pct, step=1.0,
             )
 
-        # Guardamos por si más adelante quieres usar estos umbrales diferenciados
         nivel_por_area[area_key] = {
             "COMUNICACIÓN": com_niv,
             "HABILIDADES COMUNICATIVAS": hab_niv,
@@ -161,7 +124,7 @@ with st.sidebar:
         }
 
 # ---------------------------------------------------------------------
-# CUERPO PRINCIPAL
+# CUERPO PRINCIPAL (GENERADOR)
 # ---------------------------------------------------------------------
 col1, col2 = st.columns([1, 1])
 with col1:
@@ -186,15 +149,14 @@ quiz_map_str = st.text_input(
 # Descubrir quizzes
 # ---------------------------------------------------------------------
 def _guess_area_from_name(name: str) -> str:
-    """Intenta deducir el área A/B/C a partir del nombre del quiz."""
     n = name.lower()
     if "ingenier" in n:
-        return "A"          # Examen de Admisión – Ingenierías
+        return "A"
     if "salud" in n:
-        return "B"          # Ciencias de la Salud
+        return "B"
     if "humana" in n:
-        return "C"          # Ciencias Humanas
-    return ""               # sin área detectada, se edita a mano
+        return "C"
+    return ""
 
 def discover_quizzes_ui():
     if not course_ids_str.strip():
@@ -224,12 +186,8 @@ def discover_quizzes_ui():
                     f"(curso {q['courseid']})"
                 )
 
-        st.caption(
-            "Puedes editar el área sugerida (A/B/C) desde el cuadro de texto "
-            "“Mapa quiz→Área”."
-        )
+        st.caption("Puedes editar el área sugerida (A/B/C) desde “Mapa quiz→Área”.")
 
-        # Autollenar el input si hay sugerencias
         if sugerencias:
             st.session_state["quiz_map_str"] = ",".join(sugerencias)
             st.info("Se autocompletó el mapa quiz→Área. Revísalo y ajusta si es necesario.")
@@ -249,50 +207,41 @@ st.markdown("---")
 run = st.button("🚀 Generar Excel (RESULTADOS + RESUMEN)", type="primary")
 
 if run:
-    # Validaciones básicas
     if not exam_date:
         st.error("Debes elegir la **Fecha** del examen.")
         st.stop()
     if not course_ids_str.strip():
         st.error("Debes ingresar al menos un **ID de curso**.")
         st.stop()
+
     quiz_map = core.parse_quiz_map(quiz_map_str)
     if not quiz_map:
         st.error("Debes ingresar un **Mapa quiz→Área** válido (ej. 11907=A,11908=B).")
         st.stop()
 
-    # Convertimos el umbral global de % a decimal (0.30)
+    # Umbral global % → decimal
     nivel_threshold = nivel_threshold_pct / 100.0
 
     try:
-        # Parseo de entradas
         course_ids = [int(x) for x in course_ids_str.split(",") if x.strip()]
         t_from, t_to, tz = core.day_range_epoch(exam_date.isoformat(), tz_offset)
 
-        # Info inicial
         st.info(f"Cursos: {course_ids} | Día: {exam_date} (tz {tz_offset})")
         st.info(f"Quiz→Área: {quiz_map}")
 
-        # Descubrir quizzes y quedarnos solo con los del mapa
         with st.status("🔁 Descubriendo quizzes…", expanded=False) as status:
             quizzes = core.discover_quizzes(base_url, TOKEN, course_ids)
             qids_in_cursos = {q["quizid"] for q in quizzes}
             target_qids = [qid for qid in quiz_map.keys() if qid in qids_in_cursos]
             target_quizzes = [q for q in quizzes if q["quizid"] in target_qids]
-            status.update(
-                label=f"Quizzes a procesar: {len(target_quizzes)}",
-                state="complete",
-            )
+            status.update(label=f"Quizzes a procesar: {len(target_quizzes)}", state="complete")
 
-        # Usuarios por curso
         course_users = {}
         total_users = 0
         prog_bar = st.progress(0, text="Cargando usuarios por curso…")
         for i, cid in enumerate(course_ids, start=1):
             us = core.get_course_users(
-                base_url,
-                TOKEN,
-                cid,
+                base_url, TOKEN, cid,
                 only_roles=[x.strip() for x in only_roles.split(",") if x.strip()],
             )
             course_users[cid] = us
@@ -304,30 +253,19 @@ if run:
             st.warning("Nada para procesar (sin usuarios o sin quizzes objetivo).")
             st.stop()
 
-        # Procesar intentos
         st.write("⚙️ Procesando intentos (esto puede tardar)…")
         t0 = time.time()
         rows = []
         from concurrent.futures import ThreadPoolExecutor, as_completed
+
         futs = []
         with ThreadPoolExecutor(max_workers=workers) as ex:
             for q in target_quizzes:
                 area_letter = quiz_map.get(q["quizid"])
                 users = course_users.get(q["courseid"], [])
                 for u in users:
-                    futs.append(
-                        ex.submit(
-                            core._process_user_quiz,
-                            base_url,
-                            TOKEN,
-                            q,
-                            area_letter,
-                            u,
-                            t_from,
-                            t_to,
-                            tz,
-                        )
-                    )
+                    futs.append(ex.submit(core._process_user_quiz, base_url, TOKEN, q, area_letter, u, t_from, t_to, tz))
+
             done = 0
             step_bar = st.progress(0.0)
             for fut in as_completed(futs):
@@ -343,14 +281,13 @@ if run:
             st.warning("No se encontraron intentos ese día.")
             st.stop()
 
-        # Generar Excel en memoria y ofrecer descarga
         fname = f"RESULTADOS_ADMISION_{exam_date}.xlsx"
         with tempfile.TemporaryDirectory() as td:
             out_path = Path(td) / fname
             core.write_excel_all_in_one(
                 out_path,
                 rows,
-                nivel_threshold_base=nivel_threshold,  # usa la lógica ≤ 30% para nivelación
+                nivel_threshold_base=nivel_threshold,  # <= 30% nivelación
             )
             data = out_path.read_bytes()
 
@@ -361,14 +298,13 @@ if run:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             help="Descarga el archivo generado",
         )
-
         st.caption(f"Tiempo total: {time.time() - t0:.1f} s")
 
     except Exception as e:
         st.error(f"❌ Ocurrió un error: {e}")
 
 # =====================================================================
-# 📂 CONVERSOR A FORMATO BD (postulantes_convertidos.xlsx)
+# 📂 CONVERSOR A FORMATO BD
 # =====================================================================
 st.markdown("---")
 st.header("📂 Conversor a formato BD")
@@ -376,24 +312,24 @@ st.header("📂 Conversor a formato BD")
 tab1, tab2 = st.tabs(["✅ Desde Excel Moodle (RESULTADOS/RESUMEN)", "📤 Archivo de la comisión"])
 
 # ==========================================================
-# TAB 1: Tu conversor actual (NO CAMBIA la lógica base)
+# TAB 1: Desde Excel Moodle (RESULTADOS/RESUMEN)
 # ==========================================================
 with tab1:
     st.write(
-        "Usa esta sección para tomar el Excel generado (hojas **RESULTADOS** y **RESUMEN**) "
-        "y convertirlo al formato final para subir a la base de datos."
+        "Sube el Excel generado (con hojas **RESULTADOS** y **RESUMEN**) "
+        "y lo convierto a la plantilla final para BD."
     )
 
     uploaded_file = st.file_uploader(
         "Sube el Excel con las hojas RESULTADOS y RESUMEN",
         type=["xlsx"],
-        key="conv_excel",
+        key="conv_excel_moodle",
     )
 
-    col1, col2 = st.columns(2)
-    with col1:
+    c1, c2 = st.columns(2)
+    with c1:
         periodo_value = st.text_input("Periodo", value="2026-1", key="periodo_moodle")
-    with col2:
+    with c2:
         fecha_registro_value = st.text_input(
             "Fecha de registro (AAAA-MM-DD hh:mm:ss)",
             value="2025-11-29 00:00:00",
@@ -408,10 +344,8 @@ with tab1:
             st.stop()
 
         try:
-            # 1) Leer el Excel y validar hojas
             xlsx = pd.ExcelFile(uploaded_file)
             hojas = xlsx.sheet_names
-
             if "RESULTADOS" not in hojas or "RESUMEN" not in hojas:
                 st.error(
                     "❌ El archivo no contiene las hojas necesarias: 'RESULTADOS' y 'RESUMEN'. "
@@ -422,12 +356,11 @@ with tab1:
             df_resultados = pd.read_excel(xlsx, sheet_name="RESULTADOS")
             df_resumen = pd.read_excel(xlsx, sheet_name="RESUMEN")
 
-            # --- Código estudiante (CRUCE REAL con RESULTADOS) ---
-            # 2) DNI como texto
-            df_resultados["Numero de DNI"] = df_resultados["Numero de DNI"].astype(str)
-            df_resumen["DNI"] = df_resumen["DNI"].astype(str)
+            # DNI como texto
+            df_resultados["Numero de DNI"] = df_resultados["Numero de DNI"].astype(str).str.strip()
+            df_resumen["DNI"] = df_resumen["DNI"].astype(str).str.strip()
 
-            # 3) Tomar base desde RESULTADOS (incluye Código de Matrícula si existe)
+            # Cruce REAL para codigo_estudiante desde RESULTADOS ("Código de Matrícula")
             base_cols = ["Apellido(s)", "Nombre", "Numero de DNI"]
             if "Código de Matrícula" in df_resultados.columns:
                 base_cols.append("Código de Matrícula")
@@ -441,13 +374,12 @@ with tab1:
                 how="left",
             )
 
-            # 4) codigo_estudiante: se llena desde 'Código de Matrícula' si existe
             if "Código de Matrícula" in merged.columns:
-                codigo_estudiante = merged["Código de Matrícula"].astype(str).fillna("")
+                codigo_estudiante = merged["Código de Matrícula"].astype(str).fillna("").str.strip()
             else:
                 codigo_estudiante = pd.Series([""] * len(merged))
 
-            # 5) JSON de cursos nivelación
+            # JSON de cursos nivelación
             course_cols = {
                 "COMUNICACIÓN.1": "COMUNICACIÓN",
                 "HABILIDADES COMUNICATIVAS.1": "HABILIDADES COMUNICATIVAS",
@@ -466,33 +398,30 @@ with tab1:
 
             areas_nivelacion = merged.apply(build_json_courses, axis=1)
 
-            # 6) Requiere nivelación (SI / NO)
+            # Requiere nivelación: acepta "SI" o "REQUIERE NIVELACIÓN"
             req = merged["PROGRAMA DE NIVELACIÓN"].fillna("").astype(str)
             requiere_nivelacion = req.apply(
-                lambda x: "SI" if x.strip().upper() in ("REQUIERE NIVELACIÓN", "SI") else "NO"
+                lambda x: "SI" if x.strip().upper() in ("REQUIERE NIVELACIÓN", "REQUIERE NIVELACION", "SI") else "NO"
             )
 
-            # 7) Formar DataFrame final (plantilla BD)
-            out_df = pd.DataFrame(
-                {
-                    "id": None,
-                    "periodo": periodo_value,
-                    "codigo_estudiante": codigo_estudiante,
-                    "apellidos": merged["Apellido(s)"],
-                    "nombres": merged["Nombre"],
-                    "dni": merged["DNI"].astype(str),
-                    "area": merged["Área"],
-                    "programa": merged["Programa Académico"],
-                    "local_examen": merged["Sede o Filial"],
-                    "puntaje": merged["TOTAL"].astype(int),
-                    "asistio": merged["Asistencia"],
-                    "condicion": merged["CONDICIÓN"],
-                    "requiere_nivelacion": requiere_nivelacion,
-                    "areas_nivelacion": areas_nivelacion,
-                    "fecha_registro": fecha_registro_value,
-                    "estado": 1,
-                }
-            )
+            out_df = pd.DataFrame({
+                "id": None,
+                "periodo": periodo_value,
+                "codigo_estudiante": codigo_estudiante,
+                "apellidos": merged["Apellido(s)"],
+                "nombres": merged["Nombre"],
+                "dni": merged["DNI"].astype(str),
+                "area": merged["Área"],
+                "programa": merged["Programa Académico"],
+                "local_examen": merged["Sede o Filial"],
+                "puntaje": pd.to_numeric(merged["TOTAL"], errors="coerce").fillna(0).astype(int),
+                "asistio": merged["Asistencia"],
+                "condicion": merged["CONDICIÓN"],
+                "requiere_nivelacion": requiere_nivelacion,
+                "areas_nivelacion": areas_nivelacion,
+                "fecha_registro": fecha_registro_value,
+                "estado": 1,
+            })
 
             buffer = BytesIO()
             out_df.to_excel(buffer, index=False)
@@ -511,9 +440,8 @@ with tab1:
             st.error(f"❌ Ocurrió un error durante la conversión: {e}")
             st.stop()
 
-
 # ==========================================================
-# TAB 2: Archivo de la comisión (cualquier nombre y hoja)
+# TAB 2: Archivo de la comisión (cualquier nombre/hoja)
 # ==========================================================
 with tab2:
     st.write(
@@ -529,10 +457,10 @@ with tab2:
         key="comision_excel",
     )
 
-    col1, col2 = st.columns(2)
-    with col1:
+    c1, c2 = st.columns(2)
+    with c1:
         periodo_value_com = st.text_input("Periodo", value="2026-1", key="periodo_comision")
-    with col2:
+    with c2:
         fecha_registro_value_com = st.text_input(
             "Fecha de registro (AAAA-MM-DD hh:mm:ss)",
             value="2025-11-29 00:00:00",
@@ -544,8 +472,7 @@ with tab2:
     def _norm(s: str) -> str:
         return "".join(ch for ch in str(s).strip().lower() if ch.isalnum())
 
-    def _find_col(df: pd.DataFrame, keywords: list[str]) -> str | None:
-        # busca por coincidencia flexible en nombres de columna
+    def _find_col(df: pd.DataFrame, keywords):
         cols = list(df.columns)
         ncols = {c: _norm(c) for c in cols}
         for c, nc in ncols.items():
@@ -564,8 +491,6 @@ with tab2:
                 st.error("El archivo no contiene hojas.")
                 st.stop()
 
-            # 🔎 Leemos la primera hoja con datos (o la primera hoja directamente)
-            # Si quieres, luego lo mejoramos para elegir hoja en un selectbox.
             sheet = xlsx.sheet_names[0]
             df = pd.read_excel(xlsx, sheet_name=sheet)
 
@@ -573,7 +498,6 @@ with tab2:
                 st.error("La hoja está vacía.")
                 st.stop()
 
-            # Detectar columnas típicas (flexible)
             col_ap = _find_col(df, ["apell"]) or _find_col(df, ["apellido"])
             col_nom = _find_col(df, ["nomb"])
             col_dni = _find_col(df, ["dni"])
@@ -582,11 +506,8 @@ with tab2:
             col_total = _find_col(df, ["total"]) or _find_col(df, ["puntaje"])
             col_asist = _find_col(df, ["asist"])
             col_cond = _find_col(df, ["condic"])
-
-            # Nivelación (puede venir como SI/NO o como cursos marcados)
             col_prog_niv = _find_col(df, ["programa", "nivel"]) or _find_col(df, ["nivelacion"])
 
-            # Código estudiante/matrícula (si viene)
             col_cod = (
                 _find_col(df, ["cod", "matr"]) or
                 _find_col(df, ["codigo", "mat"]) or
@@ -606,48 +527,40 @@ with tab2:
                 st.info(f"Columnas encontradas en la hoja '{sheet}': {list(df.columns)}")
                 st.stop()
 
-            # Normalizaciones
             dni = df[col_dni].astype(str).str.strip()
             apellidos = df[col_ap].astype(str).str.strip()
             nombres = df[col_nom].astype(str).str.strip()
             area = df[col_area].astype(str).str.strip()
             programa = df[col_prog].astype(str).str.strip()
-
-            # total/puntaje a número
             puntaje = pd.to_numeric(df[col_total], errors="coerce").fillna(0).astype(int)
 
             asistio = df[col_asist].astype(str).str.strip() if col_asist else "ASISTIÓ"
             condicion = df[col_cond].astype(str).str.strip() if col_cond else ""
-
-            # codigo estudiante opcional
             codigo_estudiante = df[col_cod].astype(str).fillna("").str.strip() if col_cod else ""
 
-            # Requiere nivelación: si existe columna programa nivelación, interpretamos SI/NO / REQUIERE...
             if col_prog_niv:
                 raw = df[col_prog_niv].fillna("").astype(str)
-                requiere_nivelacion = raw.apply(lambda x: "SI" if x.strip().upper() in ("SI", "REQUIERE NIVELACIÓN", "REQUIERE NIVELACION") else "NO")
+                requiere_nivelacion = raw.apply(
+                    lambda x: "SI" if x.strip().upper() in ("SI", "REQUIERE NIVELACIÓN", "REQUIERE NIVELACION") else "NO"
+                )
             else:
                 requiere_nivelacion = pd.Series(["NO"] * len(df))
 
-            # areas_nivelacion:
-            # si el archivo de comisión trae columnas por curso (COMUNICACIÓN, MATEMATICA, etc) lo convertimos a JSON
+            # Intentar armar JSON de cursos si existen columnas por curso
             course_candidates = {
                 "COMUNICACIÓN": ["comunic"],
-                "HABILIDADES COMUNICATIVAS": ["habil", "comunic"],
+                "HABILIDADES COMUNICATIVAS": ["habil"],
                 "MATEMATICA": ["matemat"],
                 "CIENCIA, TECNOLOGÍA Y AMBIENTE": ["ciencia", "tecn"],
                 "CIENCIAS SOCIALES": ["ciencias", "social"],
             }
 
-            # armamos lista de columnas detectadas para cada curso
             detected_course_cols = {}
             for curso, keys in course_candidates.items():
-                # intenta detectar columna que contenga esos tokens
-                # (en comisión puede venir como columna que dice el curso y valor SI/X/1/...)
                 best = None
                 for c in df.columns:
                     nc = _norm(c)
-                    if all(k.replace("ó","o") in nc for k in [ _norm(k) for k in keys ]):
+                    if all(_norm(k) in nc for k in keys):
                         best = c
                         break
                 if best:
@@ -666,8 +579,9 @@ with tab2:
             if detected_course_cols:
                 areas_nivelacion = df.apply(build_json_from_comision, axis=1)
             else:
-                # si no hay columnas por curso, dejamos json vacío
                 areas_nivelacion = pd.Series([json.dumps([], ensure_ascii=False)] * len(df))
+
+            col_sede = _find_col(df, ["sede"]) or _find_col(df, ["filial"]) or _find_col(df, ["local"])
 
             out_df = pd.DataFrame({
                 "id": None,
@@ -678,7 +592,7 @@ with tab2:
                 "dni": dni,
                 "area": area,
                 "programa": programa,
-                "local_examen": df[_find_col(df, ["sede"])].astype(str).str.strip() if _find_col(df, ["sede"]) else "",
+                "local_examen": df[col_sede].astype(str).str.strip() if col_sede else "",
                 "puntaje": puntaje,
                 "asistio": asistio,
                 "condicion": condicion,
@@ -705,148 +619,5 @@ with tab2:
             st.error(f"❌ Error convirtiendo archivo de comisión: {e}")
             st.stop()
 
-
-# =====================================================================
-# 📂 CONVERSOR A FORMATO BD (postulantes_convertidos.xlsx)
-# =====================================================================
-st.markdown("---")
-st.header("📂 Conversor a formato BD")
-
-st.write(
-    "Usa esta sección para tomar el Excel generado (hojas **RESULTADOS** y **RESUMEN**) "
-    "y convertirlo al formato final para subir a la base de datos."
-)
-
-uploaded_file = st.file_uploader(
-    "Sube el Excel con las hojas RESULTADOS y RESUMEN",
-    type=["xlsx"],
-    key="conv_excel",
-)
-
-col1, col2 = st.columns(2)
-with col1:
-    periodo_value = st.text_input("Periodo", value="2026-1")
-with col2:
-    fecha_registro_value = st.text_input(
-        "Fecha de registro (AAAA-MM-DD hh:mm:ss)",
-        value="2025-11-29 00:00:00",
-    )
-
-convertir = st.button("🔄 Convertir a plantilla BD")
-
-if convertir:
-    if uploaded_file is None:
-        st.error("Primero sube el archivo Excel generado (RESULTADOS + RESUMEN).")
-        st.stop()
-
-    try:
-        # 1) Leer el Excel y validar hojas
-        xlsx = pd.ExcelFile(uploaded_file)
-        hojas = xlsx.sheet_names
-
-        if "RESULTADOS" not in hojas or "RESUMEN" not in hojas:
-            st.error(
-                "❌ El archivo no contiene las hojas necesarias: 'RESULTADOS' y 'RESUMEN'. "
-                f"Hojas encontradas: {hojas}"
-            )
-            st.stop()
-
-        df_resultados = pd.read_excel(xlsx, sheet_name="RESULTADOS")
-        df_resumen = pd.read_excel(xlsx, sheet_name="RESUMEN")
-                # Detectar columna de Código de Matrícula en RESUMEN
-        cod_cols = [
-            c for c in df_resumen.columns
-            if "código" in c.lower() and "matr" in c.lower()
-        ]
-        if cod_cols:
-            cod_col = cod_cols[0]
-            codigo_estudiante = df_resumen[cod_col].astype(str).fillna("")
-        else:
-            # Si no hay columna, se deja vacío pero con el mismo largo
-            codigo_estudiante = pd.Series([""] * len(df_resumen))
-
-
-        # 2) DNI como texto
-        df_resultados["Numero de DNI"] = df_resultados["Numero de DNI"].astype(str)
-        df_resumen["DNI"] = df_resumen["DNI"].astype(str)
-
-        # 3) Combinar datos por DNI (apellidos, nombres, código de matrícula si existe)
-        base_cols = ["Apellido(s)", "Nombre", "Numero de DNI"]
-        if "Código de Matrícula" in df_resultados.columns:
-            base_cols.append("Código de Matrícula")
-
-        df_small = df_resultados[base_cols].copy()
-        merged = df_resumen.merge(
-            df_small,
-            left_on="DNI",
-            right_on="Numero de DNI",
-            how="left",
-        )
-
-        # 4) Construir JSON de cursos que requieren nivelación
-        course_cols = {
-            "COMUNICACIÓN.1": "COMUNICACIÓN",
-            "HABILIDADES COMUNICATIVAS.1": "HABILIDADES COMUNICATIVAS",
-            "MATEMATICA": "MATEMATICA",
-            "CIENCIA, TECNOLOGÍA Y AMBIENTE.1": "CIENCIA, TECNOLOGÍA Y AMBIENTE",
-            "CIENCIAS SOCIALES": "CIENCIAS SOCIALES",
-        }
-
-        def build_json_courses(row):
-            cursos = []
-            for col, nombre in course_cols.items():
-                val = row.get(col)
-                if isinstance(val, str) and val.strip() != "":
-                    cursos.append({"curso": nombre})
-            return json.dumps(cursos, ensure_ascii=False)
-
-        areas_nivelacion = merged.apply(build_json_courses, axis=1)
-
-        # 5) Requiere nivelación (SI / NO) según PROGRAMA DE NIVELACIÓN
-        req = merged["PROGRAMA DE NIVELACIÓN"].fillna("").astype(str)
-        requiere_nivelacion = req.apply(
-            lambda x: "SI" if x.strip().upper() == "REQUIERE NIVELACIÓN" else "NO"
-        )
-
-        # 6) Formar DataFrame final
-        out_df = pd.DataFrame(
-            {
-                "id": None,
-                "periodo": periodo_value,
-                "codigo_estudiante": codigo_estudiante,
-                "apellidos": merged["Apellido(s)"],
-                "nombres": merged["Nombre"],
-                "dni": merged["DNI"].astype(str),
-                "area": merged["Área"],
-                "programa": merged["Programa Académico"],
-                "local_examen": merged["Sede o Filial"],
-                "puntaje": merged["TOTAL"].astype(int),
-                "asistio": merged["Asistencia"],
-                "condicion": merged["CONDICIÓN"],
-                "requiere_nivelacion": requiere_nivelacion,
-                "areas_nivelacion": areas_nivelacion,
-                "fecha_registro": fecha_registro_value,
-                "estado": 1,
-            }
-        )
-
-        # 7) Generar Excel en memoria y ofrecer descarga
-        buffer = BytesIO()
-        out_df.to_excel(buffer, index=False)
-        buffer.seek(0)
-
-        st.success("🎉 Archivo de postulantes convertido correctamente.")
-        st.download_button(
-            label="⬇️ Descargar archivo para BD (postulantes_convertidos.xlsx)",
-            data=buffer,
-            file_name="postulantes_convertidos.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-
-        st.dataframe(out_df.head())
-
-    except Exception as e:
-        st.error(f"❌ Ocurrió un error durante la conversión: {e}")
-        st.stop()
 
 
