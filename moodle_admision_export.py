@@ -10,11 +10,11 @@ Exportador de Admisión (Moodle REST) — TODO EN UNO (sin plantilla)
   * Hoja 'RESUMEN' (mismos datos agregados y orden)
 - Sub-áreas por Área (rango de preguntas) tal como definiste:
   AREA A – INGENIERÍAS:
-    COM: 1–21,97–100 (25) | MAT: 22–71 (50) | HABIL: 72–81 (10) | CTA: 82–96 (15)
+    COM: 1–25 (25) | MAT: 26–75 (50) | HABIL: 76–85 (10) | CTA: 86–100 (15)
   AREA B – CIENCIAS SALUD:
-    COM: 1–21,97–100 (25) | MAT: 22–51 (30) | HABIL: 52–61 (10) | CTA: 62–96 (35)
+    COM: 1–25 (25) | MAT: 26–55 (30) | HABIL: 56–65 (10) | CTA: 66–100 (35)
   AREA C – CIENCIAS HUMANAS:
-    COM: 1–31,97–100 (35) | MAT: 32–61 (30) | HABIL: 62–71 (10) | CCSS: 72–96 (25)
+    COM: 1–35 (35) | MAT: 36–65 (30) | HABIL: 66–75 (10) | CCSS: 76–100 (25)
 
 Requisitos:
   pip install requests pandas openpyxl python-dateutil
@@ -52,30 +52,30 @@ AREA_DEFS: Dict[str, Dict[str, Any]] = {
         "label": "AREA-A INGENIERÍAS",
         "cta_label": "CIENCIA TECNOLOGÍA Y AMBIENTE",
         "ranges": {
-            "COMUNICACIÓN": r(1, 21) + r(97, 100),      # 25
-            "MATEMÁTICA":   r(22, 71),                  # 50
-            "HABILIDADES COMUNICATIVAS": r(72, 81),     # 10
-            "CTA/CCSS":     r(82, 96),                  # 15
+            "COMUNICACIÓN": r(1, 25),                   # 25
+            "MATEMÁTICA":   r(26, 75),                  # 50
+            "HABILIDADES COMUNICATIVAS": r(76, 85),     # 10
+            "CTA/CCSS":     r(86, 100),                 # 15
         },
     },
     "B": {  # CIENCIAS SALUD
         "label": "AREA B-CIENCIAS SALUD",
         "cta_label": "CIENCIA TECNOLOGÍA Y AMBIENTE",
         "ranges": {
-            "COMUNICACIÓN": r(1, 21) + r(97, 100),      # 25
-            "MATEMÁTICA":   r(22, 51),                  # 30
-            "HABILIDADES COMUNICATIVAS": r(52, 61),     # 10
-            "CTA/CCSS":     r(62, 96),                  # 35
+            "COMUNICACIÓN": r(1, 25),                   # 25
+            "MATEMÁTICA":   r(26, 55),                  # 30
+            "HABILIDADES COMUNICATIVAS": r(56, 65),     # 10
+            "CTA/CCSS":     r(66, 100),                 # 35
         },
     },
     "C": {  # CIENCIAS HUMANAS
         "label": "AREA C-CIENCIAS HUMANAS",
         "cta_label": "CCSS",
         "ranges": {
-            "COMUNICACIÓN": r(1, 31) + r(97, 100),      # 35
-            "MATEMÁTICA":   r(32, 61),                  # 30
-            "HABILIDADES COMUNICATIVAS": r(62, 71),     # 10
-            "CTA/CCSS":     r(72, 96),                  # 25   # CCSS
+            "COMUNICACIÓN": r(1, 35),                   # 35
+            "MATEMÁTICA":   r(36, 65),                  # 30
+            "HABILIDADES COMUNICATIVAS": r(66, 75),     # 10
+            "CTA/CCSS":     r(76, 100),                 # 25   # CCSS
         },
     },
 }
