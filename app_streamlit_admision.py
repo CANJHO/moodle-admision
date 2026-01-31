@@ -8,12 +8,15 @@ import tempfile
 import time
 import json
 import pandas as pd
-
-# ✅ NUEVO: para normalizar textos y quitar tildes (clave para detectar "CÓDIGO DE ESTUDIANTE")
 import unicodedata
+from datetime import datetime
 
 # Importamos tu lógica existente desde el script CLI
 import moodle_admision_export as core
+
+# ✅ NUEVO: Actas Finales (plantilla)
+from actas_presentacion import build_excel_final_con_actas
+
 
 st.set_page_config(
     page_title="Admisión Moodle - Exportador",
@@ -75,7 +78,6 @@ def _norm_dni_value(v) -> str:
     digits = "".join(ch for ch in s if ch.isdigit())
     if digits == "":
         return ""
-    # DNI en Perú suele ser 8
     if len(digits) < 8:
         digits = digits.zfill(8)
     return digits
@@ -275,6 +277,16 @@ if run:
     # Umbral global % → decimal
     nivel_threshold = nivel_threshold_pct / 100.0
 
+# ✅ Ruta del modelo (plantilla) - MISMA CARPETA QUE ESTE .PY
+    modelo_path = Path(__file__).resolve().parent / "MODELO DE RESULTADOS DEL EXAMEN.xlsx"
+    if not modelo_path.exists():
+        st.error(
+            "❌ No encuentro la plantilla para Actas.\n\n"
+            "Coloca el archivo aquí (misma carpeta del app_streamlit_admision.py):\n"
+            f"- {modelo_path.as_posix()}"
+        )
+        st.stop()
+
     try:
         course_ids = [int(x) for x in course_ids_str.split(",") if x.strip()]
         t_from, t_to, tz = core.day_range_epoch(exam_date.isoformat(), tz_offset)
@@ -334,22 +346,38 @@ if run:
             st.warning("No se encontraron intentos ese día.")
             st.stop()
 
-        fname = f"RESULTADOS_ADMISION_{exam_date}.xlsx"
+        # ==========================================================
+        # ✅ GENERAR EXCEL BASE + EXCEL FINAL (CON ACTAS) EN EL MISMO BOTÓN
+        # ==========================================================
+        fname_base = f"RESULTADOS_ADMISION_{exam_date}.xlsx"
         with tempfile.TemporaryDirectory() as td:
-            out_path = Path(td) / fname
+            out_path = Path(td) / fname_base
+
+            # 1) Excel base (RESULTADOS + RESUMEN)
             core.write_excel_all_in_one(
                 out_path,
                 rows,
-                nivel_threshold_base=nivel_threshold,  # <= 30% nivelación
+                nivel_threshold_base=nivel_threshold,  # se mantiene igual para no romper tu core
             )
-            data = out_path.read_bytes()
+            base_bytes = out_path.read_bytes()
+
+            # 2) Excel FINAL con actas dentro
+            final_bytes = build_excel_final_con_actas(
+                modelo_path=str(modelo_path),
+                generated_excel_bytes=base_bytes,
+                exam_date=datetime.combine(exam_date, datetime.min.time()),
+                exam_label="EXAMEN ORDINARIO",
+                output_add_resultados_resumen=True,
+            )
+
+        fname_final = f"ACTA_FINAL_Y_RESUMEN_{exam_date}.xlsx"
 
         st.download_button(
-            label="⬇️ Descargar Excel (RESULTADOS + RESUMEN)",
-            data=data,
-            file_name=fname,
+            label="⬇️ Descargar Excel (RESULTADOS + RESUMEN + ACTAS FINALES)",
+            data=final_bytes,
+            file_name=fname_final,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            help="Descarga el archivo generado",
+            help="Descarga el archivo final (incluye Actas Finales y Consolidados)",
         )
         st.caption(f"Tiempo total: {time.time() - t0:.1f} s")
 
@@ -409,32 +437,24 @@ with tab1:
             df_resultados = pd.read_excel(xlsx, sheet_name="RESULTADOS")
             df_resumen = pd.read_excel(xlsx, sheet_name="RESUMEN")
 
-            # ==========================================================
-            # ✅ FIX REAL: detectar columnas y normalizar DNI (zfill 8)
-            # ==========================================================
-
-            # Detectar columna DNI en RESULTADOS (por si cambia el nombre)
-            col_dni_res = None
-            if "Numero de DNI" in df_resultados.columns:
-                col_dni_res = "Numero de DNI"
-            else:
-                col_dni_res = _find_col_flexible(df_resultados, [
+            # Detectar columna DNI en RESULTADOS
+            col_dni_res = "Numero de DNI" if "Numero de DNI" in df_resultados.columns else _find_col_flexible(
+                df_resultados, [
                     ["numero", "dni"],
                     ["dni"],
                     ["documento", "dni"],
                     ["nro", "dni"],
-                ])
+                ]
+            )
 
             # Detectar columna DNI en RESUMEN
-            col_dni_sum = None
-            if "DNI" in df_resumen.columns:
-                col_dni_sum = "DNI"
-            else:
-                col_dni_sum = _find_col_flexible(df_resumen, [
+            col_dni_sum = "DNI" if "DNI" in df_resumen.columns else _find_col_flexible(
+                df_resumen, [
                     ["dni"],
                     ["numero", "dni"],
                     ["nro", "dni"],
-                ])
+                ]
+            )
 
             if not col_dni_res or not col_dni_sum:
                 st.error("No pude detectar la columna DNI en RESULTADOS o RESUMEN.")
@@ -442,39 +462,33 @@ with tab1:
                 st.info(f"Columnas RESUMEN: {list(df_resumen.columns)}")
                 st.stop()
 
-            # ✅ Detectar columna de código: "Código de Matrícula" o "Código de Estudiante"
+            # Detectar columna de código: "Código de Matrícula" o "Código de Estudiante"
             col_cod = None
-            # primero intentos exactos si existen
-            for exact in ["Código de Matrícula", "Codigo de Matricula", "CÓDIGO DE MATRÍCULA", "CODIGO DE MATRICULA",
-                          "Código de Estudiante", "Codigo de Estudiante", "CÓDIGO DE ESTUDIANTE", "CODIGO DE ESTUDIANTE"]:
+            for exact in [
+                "Código de Matrícula", "Codigo de Matricula", "CÓDIGO DE MATRÍCULA", "CODIGO DE MATRICULA",
+                "Código de Estudiante", "Codigo de Estudiante", "CÓDIGO DE ESTUDIANTE", "CODIGO DE ESTUDIANTE"
+            ]:
                 if exact in df_resultados.columns:
                     col_cod = exact
                     break
 
-            # si no, flexible (tildes/guiones/underscore)
             if not col_cod:
                 col_cod = _find_col_flexible(df_resultados, [
                     ["codigo", "matricula"],
                     ["codigo", "estudiante"],
                     ["cod", "matr"],
                     ["cod", "estud"],
-                    ["codigo"],  # último recurso
+                    ["codigo"],
                 ])
 
             if not col_cod:
                 st.warning("No encontré columna de CÓDIGO (MATRÍCULA/ESTUDIANTE) en RESULTADOS. Saldrá vacío.")
                 st.info(f"Columnas RESULTADOS: {list(df_resultados.columns)}")
 
-            # ✅ Normalizar DNI en ambos para que el merge funcione SIEMPRE (07489547 vs 7489547)
+            # Normalizar DNI en ambos para merge
             df_resultados["_dni_norm"] = _norm_dni_series(df_resultados[col_dni_res])
             df_resumen["_dni_norm"] = _norm_dni_series(df_resumen[col_dni_sum])
 
-            # Armamos df_small con lo necesario
-            base_cols = ["Apellido(s)", "Nombre"]
-            # Si no existen esas columnas, igual seguimos pero avisamos
-            for col_needed in ["Apellido(s)", "Nombre"]:
-                if col_needed not in df_resultados.columns:
-                    st.warning(f"En RESULTADOS no existe la columna '{col_needed}'. Revisa el formato.")
             cols_small = ["_dni_norm"]
             if "Apellido(s)" in df_resultados.columns: cols_small.append("Apellido(s)")
             if "Nombre" in df_resultados.columns: cols_small.append("Nombre")
@@ -488,15 +502,11 @@ with tab1:
                 how="left",
             )
 
-            # ✅ codigo_estudiante = codigo de matrícula / estudiante (misma cosa)
             if col_cod and col_cod in merged.columns:
-                codigo_estudiante = merged[col_cod].astype(str).fillna("").str.strip()
-                # limpia "nan"
-                codigo_estudiante = codigo_estudiante.replace("nan", "")
+                codigo_estudiante = merged[col_cod].astype(str).fillna("").str.strip().replace("nan", "")
             else:
                 codigo_estudiante = pd.Series([""] * len(merged))
 
-            # JSON de cursos nivelación
             course_cols = {
                 "COMUNICACIÓN.1": "COMUNICACIÓN",
                 "HABILIDADES COMUNICATIVAS.1": "HABILIDADES COMUNICATIVAS",
@@ -515,7 +525,6 @@ with tab1:
 
             areas_nivelacion = merged.apply(build_json_courses, axis=1)
 
-            # Requiere nivelación: acepta "SI" o "REQUIERE NIVELACIÓN"
             req = merged["PROGRAMA DE NIVELACIÓN"].fillna("").astype(str) if "PROGRAMA DE NIVELACIÓN" in merged.columns else pd.Series([""] * len(merged))
             requiere_nivelacion = req.apply(
                 lambda x: "SI" if str(x).strip().upper() in ("REQUIERE NIVELACIÓN", "REQUIERE NIVELACION", "SI") else "NO"
@@ -527,7 +536,7 @@ with tab1:
                 "codigo_estudiante": codigo_estudiante,
                 "apellidos": merged["Apellido(s)"] if "Apellido(s)" in merged.columns else "",
                 "nombres": merged["Nombre"] if "Nombre" in merged.columns else "",
-                "dni": merged[col_dni_sum].apply(_norm_dni_value),  # DNI normalizado a 8
+                "dni": merged[col_dni_sum].apply(_norm_dni_value),
                 "area": merged["Área"] if "Área" in merged.columns else "",
                 "programa": merged["Programa Académico"] if "Programa Académico" in merged.columns else "",
                 "local_examen": merged["Sede o Filial"] if "Sede o Filial" in merged.columns else "",
@@ -552,7 +561,6 @@ with tab1:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 
-            # ✅ Debug útil: muestra cuántos códigos encontró
             filled = (out_df["codigo_estudiante"].astype(str).str.strip() != "").sum()
             st.info(f"Códigos de estudiante/matrícula encontrados: {filled} / {len(out_df)}")
             st.dataframe(out_df.head())
@@ -590,7 +598,6 @@ with tab2:
 
     convertir_com = st.button("🔄 Convertir archivo de comisión → Plantilla BD", key="btn_convertir_comision")
 
-    # ✅ MEJORADO: normaliza y quita tildes (CÓDIGO vs CODIGO)
     def _norm(s: str) -> str:
         s = str(s).strip().lower()
         s = unicodedata.normalize("NFKD", s)
@@ -634,7 +641,6 @@ with tab2:
             col_cond = _find_col(df, ["condic"])
             col_prog_niv = _find_col(df, ["programa", "nivel"]) or _find_col(df, ["nivelacion"])
 
-            # ✅ MEJORADO: detectar CODIGO DE ESTUDIANTE (y variantes)
             col_cod = (
                 _find_col(df, ["codigo", "estudiante"]) or
                 _find_col(df, ["cod", "estudiante"]) or
@@ -680,7 +686,6 @@ with tab2:
             else:
                 requiere_nivelacion = pd.Series(["NO"] * len(df))
 
-            # Intentar armar JSON de cursos si existen columnas por curso
             course_candidates = {
                 "COMUNICACIÓN": ["comunic"],
                 "HABILIDADES COMUNICATIVAS": ["habil"],
