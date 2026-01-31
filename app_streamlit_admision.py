@@ -15,6 +15,8 @@ import zipfile  # ✅ NUEVO: validar .xlsx (zip interno)
 # Importamos tu lógica existente desde el script CLI
 import moodle_admision_export as core
 
+
+
 # ✅ NUEVO: Actas Finales (plantilla)
 from actas_presentacion import build_excel_final_con_actas
 
@@ -283,23 +285,24 @@ if run:
     # ==========================================================
     BASE_DIR = Path(__file__).resolve().parent
 
-    # Usa el modelo que tienes en la raíz del proyecto (según tu captura)
-    # Candidatos en orden de preferencia
-    candidates = [
-        "MODELO DE RESULTADOS DEL EXAMEN.xlsx",     # ✅ el que se ve en tu imagen
-        "MODELO_RESULTADOS_EXAMEN.xlsx",            # por si lo renombraste antes
-        "PLANTILLA_DESCARGA_MOODLE_ADMISION.xlsx",  # tu otra plantilla
-    ]
-
-    # Si quisieras usar la otra, cambia a:
-    # modelo_path = BASE_DIR / "PLANTILLA_DESCARGA_MOODLE_ADMISION.xlsx"
-
+    # ✅ MODELO ES OPCIONAL (si está, lo copia; si no, igual genera ACTAS)
     modelo_path = None
+    candidates = [
+        "MODELO DE RESULTADOS DEL EXAMEN.xlsx",
+        "MODELO_RESULTADOS_EXAMEN.xlsx",
+        "PLANTILLA_DESCARGA_MOODLE_ADMISION.xlsx",
+    ]
     for name in candidates:
         p = BASE_DIR / name
         if p.exists():
             modelo_path = p
             break
+
+    if modelo_path:
+        st.info(f"✅ Plantilla detectada (opcional): {modelo_path.name}")
+    else:
+        st.info("✅ No se usará plantilla. Se generará ACTAS automáticamente.")
+
 
  # Debug útil: listar excels detectados
     excels_en_carpeta = sorted([x.name for x in BASE_DIR.glob("*.xlsx")])
