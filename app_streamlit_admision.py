@@ -10,6 +10,7 @@ import json
 import pandas as pd
 import unicodedata
 from datetime import datetime
+import zipfile  # ✅ NUEVO: validar .xlsx (zip interno)
 
 # Importamos tu lógica existente desde el script CLI
 import moodle_admision_export as core
@@ -277,14 +278,39 @@ if run:
     # Umbral global % → decimal
     nivel_threshold = nivel_threshold_pct / 100.0
 
-# ✅ Ruta del modelo (plantilla) - MISMA CARPETA QUE ESTE .PY
-    modelo_path = Path(__file__).resolve().parent / "MODELO DE RESULTADOS DEL EXAMEN.xlsx"
+    # ==========================================================
+    # ✅ FIX: plantilla en la MISMA carpeta (no assets)
+    # ==========================================================
+    BASE_DIR = Path(__file__).resolve().parent
+
+    # Usa el modelo que tienes en la raíz del proyecto (según tu captura)
+    modelo_path = BASE_DIR / "MODELO_RESULTADOS_EXAMEN.xlsx"
+
+    # Si quisieras usar la otra, cambia a:
+    # modelo_path = BASE_DIR / "PLANTILLA_DESCARGA_MOODLE_ADMISION.xlsx"
+
     if not modelo_path.exists():
         st.error(
             "❌ No encuentro la plantilla para Actas.\n\n"
-            "Coloca el archivo aquí (misma carpeta del app_streamlit_admision.py):\n"
+            "Coloca el archivo en la misma carpeta del app_streamlit_admision.py:\n"
             f"- {modelo_path.as_posix()}"
         )
+        st.stop()
+
+    # ✅ Validación: un .xlsx real es un ZIP interno
+    try:
+        if not zipfile.is_zipfile(modelo_path):
+            st.error(
+                "❌ La plantilla NO es un .xlsx válido (no es ZIP interno).\n\n"
+                f"Archivo: {modelo_path.name}\n\n"
+                "✅ Solución:\n"
+                "1) Ábrelo en Excel\n"
+                "2) Guardar como → .xlsx\n"
+                "3) Reemplaza el archivo y vuelve a intentar"
+            )
+            st.stop()
+    except Exception as e:
+        st.error(f"❌ Error validando la plantilla: {e}")
         st.stop()
 
     try:
@@ -360,6 +386,11 @@ if run:
                 nivel_threshold_base=nivel_threshold,  # se mantiene igual para no romper tu core
             )
             base_bytes = out_path.read_bytes()
+
+            # ✅ Validación: el excel base generado también debe ser ZIP interno
+            if not zipfile.is_zipfile(BytesIO(base_bytes)):
+                st.error("❌ El Excel base generado NO es un .xlsx válido (ZIP interno). Revisa openpyxl/pandas.")
+                st.stop()
 
             # 2) Excel FINAL con actas dentro
             final_bytes = build_excel_final_con_actas(
