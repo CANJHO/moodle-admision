@@ -284,34 +284,40 @@ if run:
     BASE_DIR = Path(__file__).resolve().parent
 
     # Usa el modelo que tienes en la raíz del proyecto (según tu captura)
-    modelo_path = BASE_DIR / "MODELO_RESULTADOS_EXAMEN.xlsx"
+    # Candidatos en orden de preferencia
+    candidates = [
+        "MODELO DE RESULTADOS DEL EXAMEN.xlsx",     # ✅ el que se ve en tu imagen
+        "MODELO_RESULTADOS_EXAMEN.xlsx",            # por si lo renombraste antes
+        "PLANTILLA_DESCARGA_MOODLE_ADMISION.xlsx",  # tu otra plantilla
+    ]
 
     # Si quisieras usar la otra, cambia a:
     # modelo_path = BASE_DIR / "PLANTILLA_DESCARGA_MOODLE_ADMISION.xlsx"
 
-    if not modelo_path.exists():
+    modelo_path = None
+    for name in candidates:
+        p = BASE_DIR / name
+        if p.exists():
+            modelo_path = p
+            break
+
+ # Debug útil: listar excels detectados
+    excels_en_carpeta = sorted([x.name for x in BASE_DIR.glob("*.xlsx")])
+
+    if not modelo_path:
         st.error(
             "❌ No encuentro la plantilla para Actas.\n\n"
-            "Coloca el archivo en la misma carpeta del app_streamlit_admision.py:\n"
-            f"- {modelo_path.as_posix()}"
+            "Coloca el archivo en la misma carpeta del app_streamlit_admision.py.\n\n"
+            f"📁 Carpeta actual: {BASE_DIR.as_posix()}\n"
+            f"📄 Excel detectados: {excels_en_carpeta}\n\n"
+            "Nombres esperados (cualquiera de estos):\n"
+            "- MODELO DE RESULTADOS DEL EXAMEN.xlsx\n"
+            "- MODELO_RESULTADOS_EXAMEN.xlsx\n"
+            "- PLANTILLA_DESCARGA_MOODLE_ADMISION.xlsx"
         )
         st.stop()
 
-    # ✅ Validación: un .xlsx real es un ZIP interno
-    try:
-        if not zipfile.is_zipfile(modelo_path):
-            st.error(
-                "❌ La plantilla NO es un .xlsx válido (no es ZIP interno).\n\n"
-                f"Archivo: {modelo_path.name}\n\n"
-                "✅ Solución:\n"
-                "1) Ábrelo en Excel\n"
-                "2) Guardar como → .xlsx\n"
-                "3) Reemplaza el archivo y vuelve a intentar"
-            )
-            st.stop()
-    except Exception as e:
-        st.error(f"❌ Error validando la plantilla: {e}")
-        st.stop()
+    st.info(f"✅ Plantilla usada: {modelo_path.name}")
 
     try:
         course_ids = [int(x) for x in course_ids_str.split(",") if x.strip()]
