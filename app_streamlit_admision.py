@@ -919,15 +919,25 @@ with tab3:
 
     def _val_to_q(v):
         """
-        Convierte valor de P.n /0.2 a formato de salida para Qn.
-        Mantiene vacío si no hay dato.
+        Convierte valores de RESULTADOS al formato del sistema:
+        0.2 -> 1
+        0.0 -> 0
+        vacío -> ""
         """
         if pd.isna(v):
             return ""
-        s = str(v).strip()
-        if s.lower() == "nan":
+
+        try:
+            x = float(str(v).strip().replace(",", "."))
+        except Exception:
             return ""
-        return s
+
+        if abs(x - 0.2) < 1e-9:
+            return "1"
+        if abs(x) < 1e-9:
+            return "0"
+
+        return ""
 
     def _build_mapping_by_area(area: str):
         area = _clean_text(area).upper()
