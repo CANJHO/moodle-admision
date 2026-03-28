@@ -897,7 +897,7 @@ with tab3:
         "- Toma la hoja **RESULTADOS** del Excel generado.\n"
         "- Usa el **Área** de cada postulante para reordenar P.1...P.100 a Q1...Q100.\n"
         "- Convierte 0.2 → 1 y 0 → 0.\n"
-        "- Devuelve un CSV listo para subir al sistema de admisión."
+        "- Usa la plantilla CSV como estructura de salida."
     )
 
     acta_file = st.file_uploader(
@@ -935,12 +935,28 @@ with tab3:
         area = _clean_text(area).upper()
 
         if area == "A":
-            return list(range(1, 26)) + list(range(76, 86)) + list(range(26, 76)) + list(range(86, 101))
+            return (
+                list(range(1, 26)) +      # Q1-Q25   <- P1-P25
+                list(range(76, 86)) +     # Q26-Q35  <- P76-P85
+                list(range(26, 76)) +     # Q36-Q85  <- P26-P75
+                list(range(86, 101))      # Q86-Q100 <- P86-P100
+            )
 
         if area == "B":
-            return list(range(1, 26)) + list(range(56, 66)) + list(range(26, 56)) + list(range(66, 101))
+            return (
+                list(range(1, 26)) +      # Q1-Q25   <- P1-P25
+                list(range(56, 66)) +     # Q26-Q35  <- P56-P65
+                list(range(26, 56)) +     # Q36-Q65  <- P26-P55
+                list(range(66, 101))      # Q66-Q100 <- P66-P100
+            )
 
-        return list(range(1, 36)) + list(range(66, 76)) + list(range(36, 66)) + list(range(76, 101))
+        # Área C
+        return (
+            list(range(1, 36)) +          # Q1-Q35   <- P1-P35
+            list(range(66, 76)) +         # Q36-Q45  <- P66-P75
+            list(range(36, 66)) +         # Q46-Q75  <- P36-P65
+            list(range(76, 101))          # Q76-Q100 <- P76-P100
+        )
 
     def _find_resultados_sheet(xlsx: pd.ExcelFile):
         if "RESULTADOS" in xlsx.sheet_names:
@@ -968,102 +984,131 @@ with tab3:
 
         try:
             # =============================
-            # 1) Leer Excel RESULTADOS
+            # 1) Leer ACTA_FINAL_Y_RESUMEN
             # =============================
             xlsx = pd.ExcelFile(acta_file)
-            sheet = _find_resultados_sheet(xlsx)
+            sheet_resultados = _find_resultados_sheet(xlsx)
 
-            if not sheet:
-                st.error("No se encontró hoja RESULTADOS.")
+            if not sheet_resultados:
+                st.error(f"No encontré la hoja RESULTADOS. Hojas detectadas: {xlsx.sheet_names}")
                 st.stop()
 
-            df_res = pd.read_excel(xlsx, sheet_name=sheet)
+            df_res = pd.read_excel(xlsx, sheet_name=sheet_resultados)
 
-            col_dni = _find_col_case_insensitive(df_res, "Numero de DNI") or _find_col_case_insensitive(df_res, "DNI")
-            col_area = _find_col_case_insensitive(df_res, "Área") or _find_col_case_insensitive(df_res, "Area")
+            col_dni = (
+                _find_col_case_insensitive(df_res, "Numero de DNI")
+                or _find_col_case_insensitive(df_res, "DNI")
+            )
+            col_area = (
+                _find_col_case_insensitive(df_res, "Área")
+                or _find_col_case_insensitive(df_res, "Area")
+            )
 
             if not col_dni or not col_area:
-                st.error("No se detectó DNI o AREA.")
+                st.error("No pude detectar las columnas de DNI y/o Área en la hoja RESULTADOS.")
+                st.info(f"Columnas detectadas: {list(df_res.columns)}")
                 st.stop()
 
-            # columnas P
+            # detectar P. 1 /0.2 ... P. 100 /0.2
             p_cols = {}
             for i in range(1, 101):
-                col = _find_col_case_insensitive(df_res, f"P. {i} /0.2")
-                if not col:
-                    st.error(f"No existe columna P. {i} /0.2")
+                expected = f"P. {i} /0.2"
+                found = _find_col_case_insensitive(df_res, expected)
+                if not found:
+                    st.error(f"No encontré la columna '{expected}' en RESULTADOS.")
                     st.stop()
-                p_cols[i] = col
+                p_cols[i] = found
 
             df_res["_dni_norm"] = df_res[col_dni].apply(_norm_dni_value)
             df_res["_area_norm"] = df_res[col_area].apply(lambda x: _clean_text(x).upper())
 
             df_res = df_res[df_res["_dni_norm"] != ""].copy()
 
-            # =============================
-            # 2) Leer plantilla CSV
-            # =============================
-            df_csv = pd.read_csv(plantilla_file, dtype=str, encoding="utf-8-sig")
-            col_csv_dni = _find_col_case_insensitive(df_csv, "DNI")
-
-            if not col_csv_dni:
-                st.error("No se detectó DNI en plantilla.")
+            if df_res.empty:
+                st.error("No encontré registros válidos con DNI en RESULTADOS.")
                 st.stop()
 
-            df_csv["_dni_norm"] = df_csv[col_csv_dni].apply(_norm_dni_value)
+            # =============================
+            # 2) Leer plantilla CSV solo como estructura
+            # =============================
+            try:
+                df_csv = pd.read_csv(plantilla_file, dtype=str, encoding="utf-8-sig")
+            except Exception:
+                plantilla_file.seek(0)
+                df_csv = pd.read_csv(plantilla_file, dtype=str, encoding="latin-1")
+
+            if df_csv.empty and len(df_csv.columns) == 0:
+                st.error("No pude leer la estructura de la plantilla CSV.")
+                st.stop()
+
+            plantilla_cols = list(df_csv.columns)
 
             # =============================
-            # 3) Construir Q1..Q100
+            # 3) Construir salida desde RESULTADOS
             # =============================
-            rows = []
-            for _, r in df_res.iterrows():
-                mapping = _build_mapping_by_area(r["_area_norm"])
+            output_rows = []
 
-                row_out = {
-                    "_dni_norm": r["_dni_norm"],
-                    "AREA_SRC": r["_area_norm"]
-                }
+            for _, row in df_res.iterrows():
+                area = row["_area_norm"]
+                mapping = _build_mapping_by_area(area)
 
-                for i, p in enumerate(mapping, 1):
-                    row_out[f"Q{i}"] = _val_to_q(r[p_cols[p]])
+                out = {col: "" for col in plantilla_cols}
 
-                rows.append(row_out)
+                # DNI
+                col_out_dni = None
+                for cand in ["DNI", "NUMERO DE DNI", "NRO DNI", "DOCUMENTO", "DOC"]:
+                    for c in plantilla_cols:
+                        if _norm_text(c) == _norm_text(cand):
+                            col_out_dni = c
+                            break
+                    if col_out_dni:
+                        break
 
-            df_q = pd.DataFrame(rows).drop_duplicates("_dni_norm")
+                if col_out_dni:
+                    out[col_out_dni] = row["_dni_norm"]
 
-            merged = df_csv.merge(df_q, on="_dni_norm", how="left")
+                # AREA
+                col_out_area = None
+                for c in plantilla_cols:
+                    if _norm_text(c) == _norm_text("AREA"):
+                        col_out_area = c
+                        break
+
+                if col_out_area:
+                    out[col_out_area] = area
+
+                # Q1...Q100
+                for q_idx, p_src in enumerate(mapping, start=1):
+                    q_col = f"Q{q_idx}"
+                    if q_col in out:
+                        out[q_col] = _val_to_q(row[p_cols[p_src]])
+
+                output_rows.append(out)
+
+            out_df = pd.DataFrame(output_rows)
+
+            # Mayúsculas en texto
+            for col in out_df.columns:
+                if out_df[col].dtype == object:
+                    out_df[col] = out_df[col].apply(lambda x: x.upper() if isinstance(x, str) else x)
 
             # =============================
-            # 4) AREA
+            # 4) Descargar CSV
             # =============================
-            col_area_csv = _find_col_case_insensitive(merged, "AREA")
-            if col_area_csv:
-                merged[col_area_csv] = merged["AREA_SRC"]
+            csv_bytes = out_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
 
-            # =============================
-            # 5) Limpieza
-            # =============================
-            merged.drop(columns=["_dni_norm", "AREA_SRC"], inplace=True, errors="ignore")
-
-            # MAYÚSCULAS
-            for c in merged.columns:
-                if merged[c].dtype == object:
-                    merged[c] = merged[c].apply(lambda x: x.upper() if isinstance(x, str) else x)
-
-            # =============================
-            # 6) DESCARGA
-            # =============================
-            csv_bytes = merged.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
-
-            st.success("✅ Archivo generado correctamente")
+            st.success(f"✅ Archivo generado correctamente. Registros: {len(out_df)}")
             st.download_button(
-                "⬇️ Descargar CSV",
-                csv_bytes,
-                "plantilla_reagrupada.csv",
-                "text/csv"
+                label="⬇️ Descargar CSV reagrupado para sistema de admisión",
+                data=csv_bytes,
+                file_name="plantilla_reagrupada_sistema_admision.csv",
+                mime="text/csv",
             )
 
-            st.dataframe(merged.head())
+            preview_cols = [c for c in out_df.columns if c in ["DNI", "AREA", "Q1", "Q2", "Q3", "Q4", "Q5", "Q96", "Q97", "Q98", "Q99", "Q100"]]
+            if preview_cols:
+                st.dataframe(out_df[preview_cols].head())
 
         except Exception as e:
-            st.error(f"Error: {e}")
+            st.error(f"❌ Error al reagrupar la plantilla: {e}")
+            st.stop()
