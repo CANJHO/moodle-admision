@@ -612,12 +612,15 @@ with tab1:
 # ==========================================================
 # TAB 2: Archivo de la comisión (cualquier nombre/hoja)
 # ==========================================================
+# ==========================================================
+# TAB 2: Archivo de la comisión (formato consolidado)
+# ==========================================================
 with tab2:
     st.write(
-        "📤 **Subir archivo de la comisión (Cuadro de ingresantes / resultados / nivelación)**.\n\n"
-        "- El archivo puede tener cualquier nombre.\n"
-        "- La hoja puede tener cualquier nombre.\n"
-        "- Se transformará al mismo formato BD (sin agregar columnas)."
+        "📤 **Subir archivo de la comisión (Cuadro consolidado oficial)**.\n\n"
+        "- Soporta el formato consolidado con 2 filas de encabezado.\n"
+        "- Convierte el archivo a la plantilla final para BD.\n"
+        "- La nivelación se calculará según el umbral porcentual que definas aquí."
     )
 
     com_file = st.file_uploader(
@@ -626,7 +629,7 @@ with tab2:
         key="comision_excel",
     )
 
-    c1, c2 = st.columns(2)
+    c1, c2, c3 = st.columns(3)
     with c1:
         periodo_value_com = st.text_input("Periodo", value="2026-1", key="periodo_comision")
     with c2:
@@ -634,6 +637,16 @@ with tab2:
             "Fecha de registro (AAAA-MM-DD hh:mm:ss)",
             value="2025-11-29 00:00:00",
             key="fecha_comision",
+        )
+    with c3:
+        umbral_nivelacion_com_pct = st.number_input(
+            "Umbral nivelación comisión (%)",
+            min_value=0.0,
+            max_value=100.0,
+            value=30.0,
+            step=1.0,
+            key="umbral_nivelacion_com_pct",
+            help="Si el porcentaje de un curso es menor o igual a este valor, irá a nivelación."
         )
 
     convertir_com = st.button("🔄 Convertir archivo de comisión → Plantilla BD", key="btn_convertir_comision")
@@ -644,14 +657,70 @@ with tab2:
         s = "".join(ch for ch in s if not unicodedata.combining(ch))
         return "".join(ch for ch in s if ch.isalnum())
 
-    def _find_col(df: pd.DataFrame, keywords):
-        cols = list(df.columns)
-        ncols = {c: _norm(c) for c in cols}
-        k_norm = [_norm(k) for k in keywords]
-        for c, nc in ncols.items():
-            if all(k in nc for k in k_norm):
-                return c
-        return None
+    def _norm_dni_comm(v) -> str:
+        s = "" if pd.isna(v) else str(v).strip()
+        if s.endswith(".0"):
+            s = s[:-2]
+        digits = "".join(ch for ch in s if ch.isdigit())
+        if not digits:
+            return ""
+        return digits.zfill(8) if len(digits) < 8 else digits
+
+    def _clean_text(v) -> str:
+        if pd.isna(v):
+            return ""
+        s = str(v).strip()
+        return "" if s.lower() == "nan" else s
+
+    def _safe_float(v) -> float:
+        if pd.isna(v):
+            return 0.0
+        s = str(v).strip().replace("%", "").replace(",", ".")
+        if s == "":
+            return 0.0
+        try:
+            return float(s)
+        except Exception:
+            return 0.0
+
+    def _build_two_row_header(df_raw: pd.DataFrame):
+        h1 = df_raw.iloc[3].fillna("")
+        h2 = df_raw.iloc[4].fillna("")
+        cols = []
+        pct_count = 0
+
+        for a, b in zip(h1, h2):
+            a = str(a).strip()
+            b = str(b).strip()
+
+            if a == "%" and b == "":
+                pct_count += 1
+                if pct_count == 1:
+                    cols.append("COMUNICACION_%")
+                elif pct_count == 2:
+                    cols.append("HABILIDADES_COMUNICATIVAS_%")
+                elif pct_count == 3:
+                    cols.append("MATEMATICA_%")
+                elif pct_count == 4:
+                    cols.append("CTA_CIENCIAS_SOCIALES_%")
+                else:
+                    cols.append(f"PORCENTAJE_{pct_count}")
+                continue
+
+            if a == "COMUNICACIÓN" and "PUNT" in b.upper():
+                cols.append("COMUNICACION_PUNT")
+            elif a == "HABILIDADES COMUNICATIVAS" and "PUNT" in b.upper():
+                cols.append("HABILIDADES_COMUNICATIVAS_PUNT")
+            elif a == "MATEMÁTICA" and "PUNT" in b.upper():
+                cols.append("MATEMATICA_PUNT")
+            elif a == "CTA" and "PUNT" in b.upper():
+                cols.append("CTA_CIENCIAS_SOCIALES_PUNT")
+            elif a:
+                cols.append(a)
+            else:
+                cols.append("")
+
+        return cols
 
     if convertir_com:
         if com_file is None:
@@ -659,119 +728,114 @@ with tab2:
             st.stop()
 
         try:
-            xlsx = pd.ExcelFile(com_file)
-            if not xlsx.sheet_names:
-                st.error("El archivo no contiene hojas.")
+            raw = pd.read_excel(com_file, header=None)
+
+            if raw.empty or len(raw) < 6:
+                st.error("El archivo no tiene la estructura esperada.")
                 st.stop()
 
-            sheet = xlsx.sheet_names[0]
-            df = pd.read_excel(xlsx, sheet_name=sheet)
+            cols = _build_two_row_header(raw)
+            df = raw.iloc[5:].copy().reset_index(drop=True)
+            df.columns = cols
+
+            # quitar filas vacías o basura
+            if "DNI" not in df.columns:
+                st.error("No pude detectar la columna DNI en el archivo consolidado.")
+                st.info(f"Columnas detectadas: {list(df.columns)}")
+                st.stop()
+
+            df["DNI"] = df["DNI"].apply(_norm_dni_comm)
+            df = df[df["DNI"] != ""].copy()
 
             if df.empty:
-                st.error("La hoja está vacía.")
+                st.error("No encontré registros válidos con DNI.")
                 st.stop()
 
-            col_ap = _find_col(df, ["apell"]) or _find_col(df, ["apellido"])
-            col_nom = _find_col(df, ["nomb"])
-            col_dni = _find_col(df, ["dni"])
-            col_area = _find_col(df, ["area"])
-            col_prog = _find_col(df, ["carrera"]) or _find_col(df, ["programa"])
-            col_total = _find_col(df, ["total"]) or _find_col(df, ["puntaje"])
-            col_asist = _find_col(df, ["asist"])
-            col_cond = _find_col(df, ["condic"])
-            col_prog_niv = _find_col(df, ["programa", "nivel"]) or _find_col(df, ["nivelacion"])
-
-            col_cod = (
-                _find_col(df, ["codigo", "estudiante"]) or
-                _find_col(df, ["cod", "estudiante"]) or
-                _find_col(df, ["codigo", "matricula"]) or
-                _find_col(df, ["cod", "matr"]) or
-                _find_col(df, ["codigo", "mat"]) or
-                _find_col(df, ["matric"]) or
-                _find_col(df, ["matricula"]) or
-                _find_col(df, ["codigo"])
-            )
+            # columnas base
+            col_ap = "APELLIDOS" if "APELLIDOS" in df.columns else None
+            col_nom = "NOMBRES" if "NOMBRES" in df.columns else None
+            col_dni = "DNI"
+            col_area = "AREA" if "AREA" in df.columns else None
+            col_prog = "PROGRAMA" if "PROGRAMA" in df.columns else None
+            col_total = "PUNTAJE FINAL" if "PUNTAJE FINAL" in df.columns else None
+            col_asist = "ASISTENCIA" if "ASISTENCIA" in df.columns else None
+            col_cond = "CONDICIÓN" if "CONDICIÓN" in df.columns else ("CONDICION" if "CONDICION" in df.columns else None)
+            col_cod = "CODIGO" if "CODIGO" in df.columns else None
+            col_sede = "DIRECCIÓN LOCAL" if "DIRECCIÓN LOCAL" in df.columns else None
 
             faltantes = []
             if not col_ap: faltantes.append("APELLIDOS")
             if not col_nom: faltantes.append("NOMBRES")
-            if not col_dni: faltantes.append("DNI")
             if not col_area: faltantes.append("AREA")
-            if not col_prog: faltantes.append("CARRERA/PROGRAMA")
-            if not col_total: faltantes.append("TOTAL/PUNTAJE")
+            if not col_prog: faltantes.append("PROGRAMA")
+            if not col_total: faltantes.append("PUNTAJE FINAL")
 
             if faltantes:
                 st.error(f"No pude detectar estas columnas necesarias: {', '.join(faltantes)}")
-                st.info(f"Columnas encontradas en la hoja '{sheet}': {list(df.columns)}")
+                st.info(f"Columnas detectadas: {list(df.columns)}")
                 st.stop()
 
-            st.info(f"Columna detectada para codigo_estudiante: {col_cod}")
-
-            dni = df[col_dni].astype(str).str.strip()
-            apellidos = df[col_ap].astype(str).str.strip()
-            nombres = df[col_nom].astype(str).str.strip()
-            area = df[col_area].astype(str).str.strip()
-            programa = df[col_prog].astype(str).str.strip()
-            puntaje = pd.to_numeric(df[col_total], errors="coerce").fillna(0).astype(int)
-
-            asistio = df[col_asist].astype(str).str.strip() if col_asist else "ASISTIÓ"
-            condicion = df[col_cond].astype(str).str.strip() if col_cond else ""
-            codigo_estudiante = df[col_cod].astype(str).fillna("").str.strip() if col_cod else ""
-
-            if col_prog_niv:
-                raw = df[col_prog_niv].fillna("").astype(str)
-                requiere_nivelacion = raw.apply(
-                    lambda x: "SI" if x.strip().upper() in ("SI", "REQUIERE NIVELACIÓN", "REQUIERE NIVELACION") else "NO"
-                )
-            else:
-                requiere_nivelacion = pd.Series(["NO"] * len(df))
-
-            course_candidates = {
-                "COMUNICACIÓN": ["comunic"],
-                "HABILIDADES COMUNICATIVAS": ["habil"],
-                "MATEMATICA": ["matemat"],
-                "CIENCIA, TECNOLOGÍA Y AMBIENTE": ["ciencia", "tecn"],
-                "CIENCIAS SOCIALES": ["ciencias", "social"],
+            # porcentajes por curso
+            pct_cols = {
+                "COMUNICACIÓN": "COMUNICACION_%",
+                "HABILIDADES COMUNICATIVAS": "HABILIDADES_COMUNICATIVAS_%",
+                "MATEMATICA": "MATEMATICA_%",
+                "CTA/CIENCIAS SOCIALES": "CTA_CIENCIAS_SOCIALES_%",
             }
 
-            detected_course_cols = {}
-            for curso, keys in course_candidates.items():
-                best = None
-                for c in df.columns:
-                    nc = _norm(c)
-                    if all(_norm(k) in nc for k in keys):
-                        best = c
-                        break
-                if best:
-                    detected_course_cols[curso] = best
+            threshold_decimal = umbral_nivelacion_com_pct / 100.0
+
+            def _parse_ratio(v):
+                x = _safe_float(v)
+                # si viene como 30 => 0.30 ; si viene como 0.30 se deja
+                return x / 100.0 if x > 1 else x
 
             def build_json_from_comision(row):
                 cursos = []
-                for curso, col in detected_course_cols.items():
-                    v = row.get(col)
-                    if isinstance(v, str) and v.strip() != "":
-                        cursos.append({"curso": curso})
-                    elif isinstance(v, (int, float)) and v != 0:
-                        cursos.append({"curso": curso})
+
+                val_com = _parse_ratio(row.get(pct_cols["COMUNICACIÓN"]))
+                if val_com <= threshold_decimal:
+                    cursos.append({"curso": "COMUNICACIÓN"})
+
+                val_hab = _parse_ratio(row.get(pct_cols["HABILIDADES COMUNICATIVAS"]))
+                if val_hab <= threshold_decimal:
+                    cursos.append({"curso": "HABILIDADES COMUNICATIVAS"})
+
+                val_mat = _parse_ratio(row.get(pct_cols["MATEMATICA"]))
+                if val_mat <= threshold_decimal:
+                    cursos.append({"curso": "MATEMATICA"})
+
+                val_cta = _parse_ratio(row.get(pct_cols["CTA/CIENCIAS SOCIALES"]))
+                if val_cta <= threshold_decimal:
+                    area_actual = _clean_text(row.get(col_area)).upper()
+                    if area_actual == "C":
+                        cursos.append({"curso": "CIENCIAS SOCIALES"})
+                    else:
+                        cursos.append({"curso": "Ciencia, Tecnología y Ambiente"})
+
                 return json.dumps(cursos, ensure_ascii=False)
 
-            if detected_course_cols:
-                areas_nivelacion = df.apply(build_json_from_comision, axis=1)
-            else:
-                areas_nivelacion = pd.Series([json.dumps([], ensure_ascii=False)] * len(df))
+            areas_nivelacion = df.apply(build_json_from_comision, axis=1)
 
-            col_sede = _find_col(df, ["sede"]) or _find_col(df, ["filial"]) or _find_col(df, ["local"])
+            requiere_nivelacion = areas_nivelacion.apply(
+                lambda x: "SI" if x != "[]" else "NO"
+            )
+
+            asistio = df[col_asist].apply(_clean_text) if col_asist else pd.Series(["ASISTIÓ"] * len(df))
+            condicion = df[col_cond].apply(_clean_text) if col_cond else pd.Series([""] * len(df))
+            codigo_estudiante = df[col_cod].apply(_clean_text) if col_cod else pd.Series([""] * len(df))
+            puntaje = pd.to_numeric(df[col_total], errors="coerce").fillna(0).astype(int)
 
             out_df = pd.DataFrame({
                 "id": None,
                 "periodo": periodo_value_com,
                 "codigo_estudiante": codigo_estudiante,
-                "apellidos": apellidos,
-                "nombres": nombres,
-                "dni": dni,
-                "area": area,
-                "programa": programa,
-                "local_examen": df[col_sede].astype(str).str.strip() if col_sede else "",
+                "apellidos": df[col_ap].apply(_clean_text),
+                "nombres": df[col_nom].apply(_clean_text),
+                "dni": df[col_dni].apply(_norm_dni_comm),
+                "area": df[col_area].apply(_clean_text),
+                "programa": df[col_prog].apply(_clean_text),
+                "local_examen": df[col_sede].apply(_clean_text) if col_sede else "",
                 "puntaje": puntaje,
                 "asistio": asistio,
                 "condicion": condicion,
@@ -792,6 +856,9 @@ with tab2:
                 file_name="postulantes_convertidos.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
+
+            con_nivel = (out_df["requiere_nivelacion"] == "SI").sum()
+            st.info(f"Registros procesados: {len(out_df)} | Requieren nivelación: {con_nivel}")
             st.dataframe(out_df.head())
 
         except Exception as e:
