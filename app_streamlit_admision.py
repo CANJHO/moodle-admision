@@ -806,6 +806,12 @@ with tab2:
             def build_json_from_comision(row):
                 cursos = []
 
+                condicion_actual = _clean_text(row.get(col_cond)).upper() if col_cond else ""
+
+                # ✅ Solo los que INGRESARON pueden llevar nivelación
+                if condicion_actual != "INGRESÓ" and condicion_actual != "INGRESO":
+                    return json.dumps([], ensure_ascii=False)
+
                 val_com = _parse_ratio(row.get("COMUNICACION_%"))
                 if val_com <= threshold_decimal:
                     cursos.append({"curso": "COMUNICACIÓN"})
