@@ -10,14 +10,12 @@ import json
 import pandas as pd
 import unicodedata
 from datetime import datetime
-import zipfile  # ✅ NUEVO: validar .xlsx (zip interno)
+import zipfile  # ✅ validar .xlsx (zip interno)
 
 # Importamos tu lógica existente desde el script CLI
 import moodle_admision_export as core
 
-
-
-# ✅ NUEVO: Actas Finales (plantilla)
+# ✅ Actas Finales (plantilla)
 from actas_presentacion import build_excel_final_con_actas
 
 
@@ -39,8 +37,9 @@ except Exception:
     st.error("No se encontraron los *Secrets*. Ve a Settings → Secrets y define TOKEN y BASE_URL.")
     st.stop()
 
+
 # =====================================================================
-# ✅ HELPERS (NUEVOS) - NO ROMPEN NADA, SOLO AYUDAN A DETECTAR COLUMNAS Y DNIs
+# HELPERS GENERALES
 # =====================================================================
 
 def _norm_text(s: str) -> str:
@@ -49,6 +48,7 @@ def _norm_text(s: str) -> str:
     s = unicodedata.normalize("NFKD", s)
     s = "".join(ch for ch in s if not unicodedata.combining(ch))
     return "".join(ch for ch in s if ch.isalnum())
+
 
 def _find_col_flexible(df: pd.DataFrame, keyword_groups):
     """
@@ -67,13 +67,14 @@ def _find_col_flexible(df: pd.DataFrame, keyword_groups):
                 return c
     return None
 
+
 def _norm_dni_value(v) -> str:
     """
     Normaliza DNI:
     - convierte a string
     - elimina '.0'
     - deja solo dígitos
-    - rellena con 0 a la izquierda a 8 dígitos (clave para DNIs como 07489547)
+    - rellena con 0 a la izquierda a 8 dígitos
     """
     s = "" if pd.isna(v) else str(v).strip()
     if s.endswith(".0"):
@@ -85,8 +86,43 @@ def _norm_dni_value(v) -> str:
         digits = digits.zfill(8)
     return digits
 
+
 def _norm_dni_series(ser: pd.Series) -> pd.Series:
     return ser.apply(_norm_dni_value)
+
+
+def _clean_text(v) -> str:
+    if pd.isna(v):
+        return ""
+    s = str(v).strip()
+    if s.lower() == "nan":
+        return ""
+    return s
+
+
+def _clean_upper_text(v) -> str:
+    return _clean_text(v).upper()
+
+
+def _safe_float(v) -> float:
+    if pd.isna(v):
+        return 0.0
+    s = str(v).strip().replace("%", "").replace(",", ".")
+    if s == "":
+        return 0.0
+    try:
+        return float(s)
+    except Exception:
+        return 0.0
+
+
+def _to_upper_object_cols(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    for col in df.columns:
+        if df[col].dtype == object:
+            df[col] = df[col].apply(lambda x: x.upper() if isinstance(x, str) else x)
+    return df
+
 
 # ---------------------------------------------------------------------
 # SIDEBAR
@@ -94,7 +130,6 @@ def _norm_dni_series(ser: pd.Series) -> pd.Series:
 with st.sidebar:
     st.subheader("⚙️ Parámetros generales")
 
-    # Botón/link rojo (texto blanco) a otra app
     st.markdown(
         """
         <a href="https://asignadorzoom-gqujexxocuamxss77jq7wy.streamlit.app/"
@@ -138,14 +173,12 @@ with st.sidebar:
         max_value=100.0,
         value=30.0,
         step=1.0,
-        help="Si el porcentaje obtenido en un curso es menor o igual a este valor, "
-             "el postulante requiere nivelación en ese curso.",
+        help="Si el porcentaje obtenido en un curso es menor o igual a este valor, el postulante requiere nivelación en ese curso.",
     )
 
     st.markdown("---")
     st.subheader("📊 Umbrales de nivelación por área y curso")
 
-    # (Quedan listos por si más adelante quieres usarlos; hoy no se pasan al core)
     nivel_por_area = {}
     for area_key, area_label in [
         ("A", "Área A – Ingenierías"),
@@ -181,6 +214,7 @@ with st.sidebar:
             "CTA/CCSS": cta_niv,
         }
 
+
 # ---------------------------------------------------------------------
 # CUERPO PRINCIPAL (GENERADOR)
 # ---------------------------------------------------------------------
@@ -203,6 +237,7 @@ quiz_map_str = st.text_input(
     help="Puedes obtener los IDs desde Moodle o autollenarlo con 'Descubrir quizzes'.",
 )
 
+
 # ---------------------------------------------------------------------
 # Descubrir quizzes
 # ---------------------------------------------------------------------
@@ -215,6 +250,7 @@ def _guess_area_from_name(name: str) -> str:
     if "humana" in n:
         return "C"
     return ""
+
 
 def discover_quizzes_ui():
     if not course_ids_str.strip():
@@ -255,9 +291,11 @@ def discover_quizzes_ui():
     except Exception as e:
         st.error(f"Error al descubrir quizzes: {e}")
 
+
 st.button("🔎 Descubrir quizzes en los cursos", on_click=discover_quizzes_ui)
 
 st.markdown("---")
+
 
 # ---------------------------------------------------------------------
 # BOTÓN PRINCIPAL
@@ -277,15 +315,10 @@ if run:
         st.error("Debes ingresar un **Mapa quiz→Área** válido (ej. 11907=A,11908=B).")
         st.stop()
 
-    # Umbral global % → decimal
     nivel_threshold = nivel_threshold_pct / 100.0
 
-    # ==========================================================
-    # ✅ FIX: plantilla en la MISMA carpeta (no assets)
-    # ==========================================================
     BASE_DIR = Path(__file__).resolve().parent
 
-    # ✅ MODELO ES OPCIONAL (si está, lo copia; si no, igual genera ACTAS)
     modelo_path = None
     candidates = [
         "MODELO DE RESULTADOS DEL EXAMEN.xlsx",
@@ -303,8 +336,6 @@ if run:
     else:
         st.info("✅ No se usará plantilla. Se generará ACTAS automáticamente.")
 
-
- # Debug útil: listar excels detectados
     excels_en_carpeta = sorted([x.name for x in BASE_DIR.glob("*.xlsx")])
 
     if not modelo_path:
@@ -381,27 +412,21 @@ if run:
             st.warning("No se encontraron intentos ese día.")
             st.stop()
 
-        # ==========================================================
-        # ✅ GENERAR EXCEL BASE + EXCEL FINAL (CON ACTAS) EN EL MISMO BOTÓN
-        # ==========================================================
         fname_base = f"RESULTADOS_ADMISION_{exam_date}.xlsx"
         with tempfile.TemporaryDirectory() as td:
             out_path = Path(td) / fname_base
 
-            # 1) Excel base (RESULTADOS + RESUMEN)
             core.write_excel_all_in_one(
                 out_path,
                 rows,
-                nivel_threshold_base=nivel_threshold,  # se mantiene igual para no romper tu core
+                nivel_threshold_base=nivel_threshold,
             )
             base_bytes = out_path.read_bytes()
 
-            # ✅ Validación: el excel base generado también debe ser ZIP interno
             if not zipfile.is_zipfile(BytesIO(base_bytes)):
                 st.error("❌ El Excel base generado NO es un .xlsx válido (ZIP interno). Revisa openpyxl/pandas.")
                 st.stop()
 
-            # 2) Excel FINAL con actas dentro
             final_bytes = build_excel_final_con_actas(
                 modelo_path=str(modelo_path),
                 generated_excel_bytes=base_bytes,
@@ -424,13 +449,15 @@ if run:
     except Exception as e:
         st.error(f"❌ Ocurrió un error: {e}")
 
+
 # =====================================================================
-# 📂 CONVERSOR A FORMATO BD
+# CONVERSOR A FORMATO BD
 # =====================================================================
 st.markdown("---")
 st.header("📂 Conversor a formato BD")
 
 tab1, tab2 = st.tabs(["✅ Desde Excel Moodle (RESULTADOS/RESUMEN)", "📤 Archivo de la comisión"])
+
 
 # ==========================================================
 # TAB 1: Desde Excel Moodle (RESULTADOS/RESUMEN)
@@ -477,7 +504,6 @@ with tab1:
             df_resultados = pd.read_excel(xlsx, sheet_name="RESULTADOS")
             df_resumen = pd.read_excel(xlsx, sheet_name="RESUMEN")
 
-            # Detectar columna DNI en RESULTADOS
             col_dni_res = "Numero de DNI" if "Numero de DNI" in df_resultados.columns else _find_col_flexible(
                 df_resultados, [
                     ["numero", "dni"],
@@ -487,7 +513,6 @@ with tab1:
                 ]
             )
 
-            # Detectar columna DNI en RESUMEN
             col_dni_sum = "DNI" if "DNI" in df_resumen.columns else _find_col_flexible(
                 df_resumen, [
                     ["dni"],
@@ -502,7 +527,6 @@ with tab1:
                 st.info(f"Columnas RESUMEN: {list(df_resumen.columns)}")
                 st.stop()
 
-            # Detectar columna de código: "Código de Matrícula" o "Código de Estudiante"
             col_cod = None
             for exact in [
                 "Código de Matrícula", "Codigo de Matricula", "CÓDIGO DE MATRÍCULA", "CODIGO DE MATRICULA",
@@ -525,14 +549,16 @@ with tab1:
                 st.warning("No encontré columna de CÓDIGO (MATRÍCULA/ESTUDIANTE) en RESULTADOS. Saldrá vacío.")
                 st.info(f"Columnas RESULTADOS: {list(df_resultados.columns)}")
 
-            # Normalizar DNI en ambos para merge
             df_resultados["_dni_norm"] = _norm_dni_series(df_resultados[col_dni_res])
             df_resumen["_dni_norm"] = _norm_dni_series(df_resumen[col_dni_sum])
 
             cols_small = ["_dni_norm"]
-            if "Apellido(s)" in df_resultados.columns: cols_small.append("Apellido(s)")
-            if "Nombre" in df_resultados.columns: cols_small.append("Nombre")
-            if col_cod: cols_small.append(col_cod)
+            if "Apellido(s)" in df_resultados.columns:
+                cols_small.append("Apellido(s)")
+            if "Nombre" in df_resultados.columns:
+                cols_small.append("Nombre")
+            if col_cod:
+                cols_small.append(col_cod)
 
             df_small = df_resultados[cols_small].copy()
 
@@ -560,7 +586,7 @@ with tab1:
                 for col, nombre in course_cols.items():
                     val = row.get(col)
                     if isinstance(val, str) and val.strip() != "":
-                        cursos.append({"curso": nombre})
+                        cursos.append({"curso": nombre.upper()})
                 return json.dumps(cursos, ensure_ascii=False)
 
             areas_nivelacion = merged.apply(build_json_courses, axis=1)
@@ -572,19 +598,19 @@ with tab1:
 
             out_df = pd.DataFrame({
                 "id": None,
-                "periodo": periodo_value,
-                "codigo_estudiante": codigo_estudiante,
-                "apellidos": merged["Apellido(s)"] if "Apellido(s)" in merged.columns else "",
-                "nombres": merged["Nombre"] if "Nombre" in merged.columns else "",
+                "periodo": periodo_value.upper(),
+                "codigo_estudiante": codigo_estudiante.astype(str).str.upper(),
+                "apellidos": merged["Apellido(s)"].apply(_clean_upper_text) if "Apellido(s)" in merged.columns else "",
+                "nombres": merged["Nombre"].apply(_clean_upper_text) if "Nombre" in merged.columns else "",
                 "dni": merged[col_dni_sum].apply(_norm_dni_value),
-                "area": merged["Área"] if "Área" in merged.columns else "",
-                "programa": merged["Programa Académico"] if "Programa Académico" in merged.columns else "",
-                "local_examen": merged["Sede o Filial"] if "Sede o Filial" in merged.columns else "",
+                "area": merged["Área"].apply(_clean_upper_text) if "Área" in merged.columns else "",
+                "programa": merged["Programa Académico"].apply(_clean_upper_text) if "Programa Académico" in merged.columns else "",
+                "local_examen": merged["Sede o Filial"].apply(_clean_upper_text) if "Sede o Filial" in merged.columns else "",
                 "puntaje": pd.to_numeric(merged["TOTAL"], errors="coerce").fillna(0).astype(int) if "TOTAL" in merged.columns else 0,
-                "asistio": merged["Asistencia"] if "Asistencia" in merged.columns else "",
-                "condicion": merged["CONDICIÓN"] if "CONDICIÓN" in merged.columns else "",
-                "requiere_nivelacion": requiere_nivelacion,
-                "areas_nivelacion": areas_nivelacion,
+                "asistio": merged["Asistencia"].apply(_clean_upper_text) if "Asistencia" in merged.columns else "",
+                "condicion": merged["CONDICIÓN"].apply(_clean_upper_text) if "CONDICIÓN" in merged.columns else "",
+                "requiere_nivelacion": requiere_nivelacion.astype(str).str.upper(),
+                "areas_nivelacion": areas_nivelacion.astype(str).str.upper(),
                 "fecha_registro": fecha_registro_value,
                 "estado": 1,
             })
@@ -609,9 +635,7 @@ with tab1:
             st.error(f"❌ Ocurrió un error durante la conversión: {e}")
             st.stop()
 
-# ==========================================================
-# TAB 2: Archivo de la comisión (cualquier nombre/hoja)
-# ==========================================================
+
 # ==========================================================
 # TAB 2: Archivo de la comisión (formato consolidado)
 # ==========================================================
@@ -651,7 +675,7 @@ with tab2:
 
     convertir_com = st.button("🔄 Convertir archivo de comisión → Plantilla BD", key="btn_convertir_comision")
 
-    def _norm(s: str) -> str:
+    def _norm_comm(s: str) -> str:
         s = str(s).strip().lower()
         s = unicodedata.normalize("NFKD", s)
         s = "".join(ch for ch in s if not unicodedata.combining(ch))
@@ -666,61 +690,53 @@ with tab2:
             return ""
         return digits.zfill(8) if len(digits) < 8 else digits
 
-    def _clean_text(v) -> str:
-        if pd.isna(v):
-            return ""
-        s = str(v).strip()
-        return "" if s.lower() == "nan" else s
-
-    def _safe_float(v) -> float:
-        if pd.isna(v):
-            return 0.0
-        s = str(v).strip().replace("%", "").replace(",", ".")
-        if s == "":
-            return 0.0
-        try:
-            return float(s)
-        except Exception:
-            return 0.0
-
     def _build_two_row_header(df_raw: pd.DataFrame):
         h1 = df_raw.iloc[3].fillna("")
         h2 = df_raw.iloc[4].fillna("")
         cols = []
-        pct_count = 0
+
+        current_main = ""
 
         for a, b in zip(h1, h2):
             a = str(a).strip()
             b = str(b).strip()
 
-            if a == "%" and b == "":
-                pct_count += 1
-                if pct_count == 1:
-                    cols.append("COMUNICACION_%")
-                elif pct_count == 2:
-                    cols.append("HABILIDADES_COMUNICATIVAS_%")
-                elif pct_count == 3:
-                    cols.append("MATEMATICA_%")
-                elif pct_count == 4:
-                    cols.append("CTA_CIENCIAS_SOCIALES_%")
-                else:
-                    cols.append(f"PORCENTAJE_{pct_count}")
-                continue
+            if a:
+                current_main = a
 
-            if a == "COMUNICACIÓN" and "PUNT" in b.upper():
+            main_norm = _norm_comm(current_main)
+            sub_norm = _norm_comm(b)
+
+            if main_norm == "comunicacion" and sub_norm.startswith("punt"):
                 cols.append("COMUNICACION_PUNT")
-            elif a == "HABILIDADES COMUNICATIVAS" and "PUNT" in b.upper():
+            elif main_norm == "comunicacion" and sub_norm == "":
+                cols.append("COMUNICACION_%")
+
+            elif main_norm == "habilidadescomunicativas" and sub_norm.startswith("punt"):
                 cols.append("HABILIDADES_COMUNICATIVAS_PUNT")
-            elif a == "MATEMÁTICA" and "PUNT" in b.upper():
+            elif main_norm == "habilidadescomunicativas" and sub_norm == "":
+                cols.append("HABILIDADES_COMUNICATIVAS_%")
+
+            elif main_norm == "matematica" and sub_norm.startswith("punt"):
                 cols.append("MATEMATICA_PUNT")
-            elif a == "CTA" and "PUNT" in b.upper():
+            elif main_norm == "matematica" and sub_norm == "":
+                cols.append("MATEMATICA_%")
+
+            elif main_norm == "cta" and sub_norm.startswith("punt"):
                 cols.append("CTA_CIENCIAS_SOCIALES_PUNT")
+            elif main_norm == "cta" and sub_norm == "":
+                cols.append("CTA_CIENCIAS_SOCIALES_%")
+
             elif a:
                 cols.append(a)
             else:
-                cols.append("")
+                cols.append(f"COL_{len(cols)}")
 
         return cols
+
+    def _parse_ratio(v):
+        x = _safe_float(v)
+        return x / 100.0 if x > 1 else x
 
     if convertir_com:
         if com_file is None:
@@ -738,7 +754,6 @@ with tab2:
             df = raw.iloc[5:].copy().reset_index(drop=True)
             df.columns = cols
 
-            # quitar filas vacías o basura
             if "DNI" not in df.columns:
                 st.error("No pude detectar la columna DNI en el archivo consolidado.")
                 st.info(f"Columnas detectadas: {list(df.columns)}")
@@ -751,7 +766,6 @@ with tab2:
                 st.error("No encontré registros válidos con DNI.")
                 st.stop()
 
-            # columnas base
             col_ap = "APELLIDOS" if "APELLIDOS" in df.columns else None
             col_nom = "NOMBRES" if "NOMBRES" in df.columns else None
             col_dni = "DNI"
@@ -764,18 +778,22 @@ with tab2:
             col_sede = "DIRECCIÓN LOCAL" if "DIRECCIÓN LOCAL" in df.columns else None
 
             faltantes = []
-            if not col_ap: faltantes.append("APELLIDOS")
-            if not col_nom: faltantes.append("NOMBRES")
-            if not col_area: faltantes.append("AREA")
-            if not col_prog: faltantes.append("PROGRAMA")
-            if not col_total: faltantes.append("PUNTAJE FINAL")
+            if not col_ap:
+                faltantes.append("APELLIDOS")
+            if not col_nom:
+                faltantes.append("NOMBRES")
+            if not col_area:
+                faltantes.append("AREA")
+            if not col_prog:
+                faltantes.append("PROGRAMA")
+            if not col_total:
+                faltantes.append("PUNTAJE FINAL")
 
             if faltantes:
                 st.error(f"No pude detectar estas columnas necesarias: {', '.join(faltantes)}")
                 st.info(f"Columnas detectadas: {list(df.columns)}")
                 st.stop()
 
-            # porcentajes por curso
             pct_cols = {
                 "COMUNICACIÓN": "COMUNICACION_%",
                 "HABILIDADES COMUNICATIVAS": "HABILIDADES_COMUNICATIVAS_%",
@@ -785,33 +803,28 @@ with tab2:
 
             threshold_decimal = umbral_nivelacion_com_pct / 100.0
 
-            def _parse_ratio(v):
-                x = _safe_float(v)
-                # si viene como 30 => 0.30 ; si viene como 0.30 se deja
-                return x / 100.0 if x > 1 else x
-
             def build_json_from_comision(row):
                 cursos = []
 
-                val_com = _parse_ratio(row.get(pct_cols["COMUNICACIÓN"]))
+                val_com = _parse_ratio(row.get("COMUNICACION_%"))
                 if val_com <= threshold_decimal:
                     cursos.append({"curso": "COMUNICACIÓN"})
 
-                val_hab = _parse_ratio(row.get(pct_cols["HABILIDADES COMUNICATIVAS"]))
+                val_hab = _parse_ratio(row.get("HABILIDADES_COMUNICATIVAS_%"))
                 if val_hab <= threshold_decimal:
                     cursos.append({"curso": "HABILIDADES COMUNICATIVAS"})
 
-                val_mat = _parse_ratio(row.get(pct_cols["MATEMATICA"]))
+                val_mat = _parse_ratio(row.get("MATEMATICA_%"))
                 if val_mat <= threshold_decimal:
                     cursos.append({"curso": "MATEMATICA"})
 
-                val_cta = _parse_ratio(row.get(pct_cols["CTA/CIENCIAS SOCIALES"]))
+                val_cta = _parse_ratio(row.get("CTA_CIENCIAS_SOCIALES_%"))
                 if val_cta <= threshold_decimal:
                     area_actual = _clean_text(row.get(col_area)).upper()
                     if area_actual == "C":
                         cursos.append({"curso": "CIENCIAS SOCIALES"})
                     else:
-                        cursos.append({"curso": "Ciencia, Tecnología y Ambiente"})
+                        cursos.append({"curso": "CIENCIA, TECNOLOGÍA Y AMBIENTE"})
 
                 return json.dumps(cursos, ensure_ascii=False)
 
@@ -821,26 +834,26 @@ with tab2:
                 lambda x: "SI" if x != "[]" else "NO"
             )
 
-            asistio = df[col_asist].apply(_clean_text) if col_asist else pd.Series(["ASISTIÓ"] * len(df))
-            condicion = df[col_cond].apply(_clean_text) if col_cond else pd.Series([""] * len(df))
-            codigo_estudiante = df[col_cod].apply(_clean_text) if col_cod else pd.Series([""] * len(df))
+            asistio = df[col_asist].apply(_clean_upper_text) if col_asist else pd.Series(["ASISTIÓ"] * len(df))
+            condicion = df[col_cond].apply(_clean_upper_text) if col_cond else pd.Series([""] * len(df))
+            codigo_estudiante = df[col_cod].apply(_clean_upper_text) if col_cod else pd.Series([""] * len(df))
             puntaje = pd.to_numeric(df[col_total], errors="coerce").fillna(0).astype(int)
 
             out_df = pd.DataFrame({
                 "id": None,
-                "periodo": periodo_value_com,
+                "periodo": periodo_value_com.upper(),
                 "codigo_estudiante": codigo_estudiante,
-                "apellidos": df[col_ap].apply(_clean_text),
-                "nombres": df[col_nom].apply(_clean_text),
+                "apellidos": df[col_ap].apply(_clean_upper_text),
+                "nombres": df[col_nom].apply(_clean_upper_text),
                 "dni": df[col_dni].apply(_norm_dni_comm),
-                "area": df[col_area].apply(_clean_text),
-                "programa": df[col_prog].apply(_clean_text),
-                "local_examen": df[col_sede].apply(_clean_text) if col_sede else "",
+                "area": df[col_area].apply(_clean_upper_text),
+                "programa": df[col_prog].apply(_clean_upper_text),
+                "local_examen": df[col_sede].apply(_clean_upper_text) if col_sede else "",
                 "puntaje": puntaje,
                 "asistio": asistio,
                 "condicion": condicion,
-                "requiere_nivelacion": requiere_nivelacion,
-                "areas_nivelacion": areas_nivelacion,
+                "requiere_nivelacion": requiere_nivelacion.astype(str).str.upper(),
+                "areas_nivelacion": areas_nivelacion.astype(str).str.upper(),
                 "fecha_registro": fecha_registro_value_com,
                 "estado": 1,
             })
