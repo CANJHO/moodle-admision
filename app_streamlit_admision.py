@@ -918,18 +918,24 @@ with tab3:
     )
 
     def _val_to_q(v):
+        # Si viene vacío, también cuenta como 0
         if pd.isna(v):
-            return ""
+            return "0"
+
+        s = str(v).strip().replace(",", ".")
+        if s == "" or s.lower() == "nan":
+            return "0"
+
         try:
-            x = float(str(v).strip().replace(",", "."))
+            x = float(s)
         except Exception:
-            return ""
+            return "0"
 
         if abs(x - 0.2) < 1e-9:
             return "1"
-        if abs(x) < 1e-9:
-            return "0"
-        return ""
+
+        # Todo lo demás lo tratamos como incorrecto = 0
+        return "0"
 
     def _build_mapping_by_area(area: str):
         area = _clean_text(area).upper()
