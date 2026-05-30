@@ -549,9 +549,28 @@ with tab1:
                     ["codigo"],
                 ])
 
-            if not col_cod:
-                st.warning("No encontré columna de CÓDIGO (MATRÍCULA/ESTUDIANTE) en RESULTADOS. Saldrá vacío.")
+            col_cod_resumen = None
+            for exact in [
+                "Código de Matrícula", "Codigo de Matricula", "CÓDIGO DE MATRÍCULA", "CODIGO DE MATRICULA",
+                "Código de Estudiante", "Codigo de Estudiante", "CÓDIGO DE ESTUDIANTE", "CODIGO DE ESTUDIANTE"
+            ]:
+                if exact in df_resumen.columns:
+                    col_cod_resumen = exact
+                    break
+
+            if not col_cod_resumen:
+                col_cod_resumen = _find_col_flexible(df_resumen, [
+                    ["codigo", "matricula"],
+                    ["codigo", "estudiante"],
+                    ["cod", "matr"],
+                    ["cod", "estud"],
+                    ["codigo"],
+                ])
+
+            if not col_cod and not col_cod_resumen:
+                st.warning("No encontré columna de CÓDIGO (MATRÍCULA/ESTUDIANTE) en RESULTADOS ni RESUMEN. Saldrá vacío.")
                 st.info(f"Columnas RESULTADOS: {list(df_resultados.columns)}")
+                st.info(f"Columnas RESUMEN: {list(df_resumen.columns)}")
 
             df_resultados["_dni_norm"] = _norm_dni_series(df_resultados[col_dni_res])
             df_resumen["_dni_norm"] = _norm_dni_series(df_resumen[col_dni_sum])
@@ -565,6 +584,9 @@ with tab1:
                 cols_small.append(col_cod)
 
             df_small = df_resultados[cols_small].copy()
+            if col_cod:
+                df_small["_codigo_estudiante_src"] = df_small[col_cod].apply(_clean_text)
+                df_small = df_small.drop(columns=[col_cod])
 
             merged = df_resumen.merge(
                 df_small,
@@ -572,8 +594,15 @@ with tab1:
                 how="left",
             )
 
-            if col_cod and col_cod in merged.columns:
-                codigo_estudiante = merged[col_cod].astype(str).fillna("").str.strip().replace("nan", "")
+            if col_cod_resumen and col_cod_resumen in merged.columns:
+                codigo_estudiante = merged[col_cod_resumen].apply(_clean_text)
+                if "_codigo_estudiante_src" in merged.columns:
+                    codigo_estudiante = codigo_estudiante.mask(
+                        codigo_estudiante.astype(str).str.strip() == "",
+                        merged["_codigo_estudiante_src"].apply(_clean_text),
+                    )
+            elif "_codigo_estudiante_src" in merged.columns:
+                codigo_estudiante = merged["_codigo_estudiante_src"].apply(_clean_text)
             else:
                 codigo_estudiante = pd.Series([""] * len(merged))
 
@@ -610,11 +639,12 @@ with tab1:
                 "area": merged["Área"].apply(_clean_upper_text) if "Área" in merged.columns else "",
                 "programa": merged["Programa Académico"].apply(_clean_upper_text) if "Programa Académico" in merged.columns else "",
                 "local_examen": merged["Sede o Filial"].apply(_clean_upper_text) if "Sede o Filial" in merged.columns else "",
+                "modalidad_examen": "VIRTUAL",
                 "puntaje": pd.to_numeric(merged["TOTAL"], errors="coerce").fillna(0).astype(int) if "TOTAL" in merged.columns else 0,
                 "asistio": merged["Asistencia"].apply(_clean_upper_text) if "Asistencia" in merged.columns else "",
                 "condicion": merged["CONDICIÓN"].apply(_clean_upper_text) if "CONDICIÓN" in merged.columns else "",
                 "requiere_nivelacion": requiere_nivelacion.astype(str).str.upper(),
-                "areas_nivelacion": areas_nivelacion.astype(str).str.upper(),
+                "areas_nivelacion": areas_nivelacion.astype(str),
                 "fecha_registro": fecha_registro_value,
                 "estado": 1,
             })
@@ -859,11 +889,12 @@ with tab2:
                 "area": df[col_area].apply(_clean_upper_text),
                 "programa": df[col_prog].apply(_clean_upper_text),
                 "local_examen": df[col_sede].apply(_clean_upper_text) if col_sede else "",
+                "modalidad_examen": "VIRTUAL",
                 "puntaje": puntaje,
                 "asistio": asistio,
                 "condicion": condicion,
                 "requiere_nivelacion": requiere_nivelacion.astype(str).str.upper(),
-                "areas_nivelacion": areas_nivelacion.astype(str).str.upper(),
+                "areas_nivelacion": areas_nivelacion.astype(str),
                 "fecha_registro": fecha_registro_value_com,
                 "estado": 1,
             })
