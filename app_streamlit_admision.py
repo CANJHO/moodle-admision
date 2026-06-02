@@ -508,6 +508,18 @@ with tab1:
             df_resultados = pd.read_excel(xlsx, sheet_name="RESULTADOS")
             df_resumen = pd.read_excel(xlsx, sheet_name="RESUMEN")
 
+            acta_lookup = pd.DataFrame(columns=["_dni_norm", "_codigo_acta", "_condicion_acta"])
+            sheet_acta = "ACTA" if "ACTA" in hojas else ("CONSOLIDADO" if "CONSOLIDADO" in hojas else None)
+            if sheet_acta:
+                df_acta_raw = pd.read_excel(xlsx, sheet_name=sheet_acta, header=None)
+                if df_acta_raw.shape[1] >= 22:
+                    acta_lookup = pd.DataFrame({
+                        "_dni_norm": df_acta_raw.iloc[:, 3].apply(_norm_dni_value),
+                        "_codigo_acta": df_acta_raw.iloc[:, 4].apply(_clean_text),
+                        "_condicion_acta": df_acta_raw.iloc[:, 21].apply(_clean_text),
+                    })
+                    acta_lookup = acta_lookup[acta_lookup["_dni_norm"] != ""].drop_duplicates("_dni_norm", keep="last")
+
             col_dni_res = "Numero de DNI" if "Numero de DNI" in df_resultados.columns else _find_col_flexible(
                 df_resultados, [
                     ["numero", "dni"],
@@ -593,6 +605,8 @@ with tab1:
                 on="_dni_norm",
                 how="left",
             )
+            if not acta_lookup.empty:
+                merged = merged.merge(acta_lookup, on="_dni_norm", how="left")
 
             if col_cod_resumen and col_cod_resumen in merged.columns:
                 codigo_estudiante = merged[col_cod_resumen].apply(_clean_text)
@@ -605,6 +619,11 @@ with tab1:
                 codigo_estudiante = merged["_codigo_estudiante_src"].apply(_clean_text)
             else:
                 codigo_estudiante = pd.Series([""] * len(merged))
+            if "_codigo_acta" in merged.columns:
+                codigo_estudiante = codigo_estudiante.mask(
+                    codigo_estudiante.astype(str).str.strip() == "",
+                    merged["_codigo_acta"].apply(_clean_text),
+                )
 
             course_cols = {
                 "COMUNICACIÓN.1": "COMUNICACIÓN",
@@ -628,6 +647,12 @@ with tab1:
             requiere_nivelacion = req.apply(
                 lambda x: "SI" if str(x).strip().upper() in ("REQUIERE NIVELACIÓN", "REQUIERE NIVELACION", "SI") else "NO"
             )
+            condicion = merged["CONDICIÓN"].apply(_clean_upper_text) if "CONDICIÓN" in merged.columns else pd.Series([""] * len(merged))
+            if "_condicion_acta" in merged.columns:
+                condicion = condicion.mask(
+                    condicion.astype(str).str.strip() == "",
+                    merged["_condicion_acta"].apply(_clean_upper_text),
+                )
 
             out_df = pd.DataFrame({
                 "id": None,
@@ -642,7 +667,7 @@ with tab1:
                 "modalidad_examen": "VIRTUAL",
                 "puntaje": pd.to_numeric(merged["TOTAL"], errors="coerce").fillna(0).astype(int) if "TOTAL" in merged.columns else 0,
                 "asistio": merged["Asistencia"].apply(_clean_upper_text) if "Asistencia" in merged.columns else "",
-                "condicion": merged["CONDICIÓN"].apply(_clean_upper_text) if "CONDICIÓN" in merged.columns else "",
+                "condicion": condicion,
                 "requiere_nivelacion": requiere_nivelacion.astype(str).str.upper(),
                 "areas_nivelacion": areas_nivelacion.astype(str),
                 "fecha_registro": fecha_registro_value,
