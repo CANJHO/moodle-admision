@@ -567,17 +567,16 @@ with tab1:
             df_resultados["_dni_norm"] = _norm_dni_series(df_resultados[col_dni_res])
             df_resumen["_dni_norm"] = _norm_dni_series(df_resumen[col_dni_sum])
 
-            def _build_code_lookup(df_src: pd.DataFrame, code_col, out_col: str) -> pd.DataFrame:
-                if not code_col or code_col not in df_src.columns:
-                    return pd.DataFrame(columns=["_dni_norm", out_col])
-                lookup = df_src[["_dni_norm", code_col]].copy()
-                lookup[out_col] = lookup[code_col].apply(_clean_text)
-                lookup = lookup[(lookup["_dni_norm"] != "") & (lookup[out_col] != "")]
-                return lookup[["_dni_norm", out_col]].drop_duplicates("_dni_norm", keep="last")
-
-            col_cod_resumen_pos = df_resumen.columns[2] if len(df_resumen.columns) > 2 else col_cod_resumen
-            col_cond_resumen_pos = df_resumen.columns[25] if len(df_resumen.columns) > 25 else None
-            codigo_resumen_lookup = _build_code_lookup(df_resumen, col_cod_resumen_pos, "_codigo_matricula_resumen")
+            codigo_estudiante_resumen = (
+                df_resumen.iloc[:, 2].apply(_clean_text)
+                if df_resumen.shape[1] > 2
+                else pd.Series([""] * len(df_resumen))
+            )
+            condicion_resumen = (
+                df_resumen.iloc[:, 25].apply(_clean_upper_text)
+                if df_resumen.shape[1] > 25
+                else pd.Series([""] * len(df_resumen))
+            )
 
             cols_small = ["_dni_norm"]
             if "Apellido(s)" in df_resultados.columns:
@@ -597,13 +596,9 @@ with tab1:
                 on="_dni_norm",
                 how="left",
             )
-            if not codigo_resumen_lookup.empty:
-                merged = merged.merge(codigo_resumen_lookup, on="_dni_norm", how="left")
-
-            if "_codigo_matricula_resumen" in merged.columns:
-                codigo_estudiante = merged["_codigo_matricula_resumen"].apply(_clean_text)
-            else:
-                codigo_estudiante = pd.Series([""] * len(merged))
+            merged["_codigo_estudiante_resumen_directo"] = codigo_estudiante_resumen.reset_index(drop=True)
+            merged["_condicion_resumen_directa"] = condicion_resumen.reset_index(drop=True)
+            codigo_estudiante = merged["_codigo_estudiante_resumen_directo"].apply(_clean_text)
 
             course_cols = {
                 "COMUNICACIÓN.1": "COMUNICACIÓN",
@@ -627,12 +622,7 @@ with tab1:
             requiere_nivelacion = req.apply(
                 lambda x: "SI" if str(x).strip().upper() in ("REQUIERE NIVELACIÓN", "REQUIERE NIVELACION", "SI") else "NO"
             )
-            col_cond_resumen = col_cond_resumen_pos or ("CONDICIÓN" if "CONDICIÓN" in df_resumen.columns else _find_col_flexible(
-                df_resumen, [
-                    ["condicion"],
-                ]
-            ))
-            condicion = merged[col_cond_resumen].apply(_clean_upper_text) if col_cond_resumen and col_cond_resumen in merged.columns else pd.Series([""] * len(merged))
+            condicion = merged["_condicion_resumen_directa"].apply(_clean_upper_text)
 
             out_df = pd.DataFrame({
                 "id": None,
