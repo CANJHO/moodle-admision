@@ -508,17 +508,6 @@ with tab1:
             df_resultados = pd.read_excel(xlsx, sheet_name="RESULTADOS")
             df_resumen = pd.read_excel(xlsx, sheet_name="RESUMEN")
 
-            acta_lookup = pd.DataFrame(columns=["_dni_norm", "_condicion_acta"])
-            sheet_acta = "ACTA" if "ACTA" in hojas else None
-            if sheet_acta:
-                df_acta_raw = pd.read_excel(xlsx, sheet_name=sheet_acta, header=None)
-                if df_acta_raw.shape[1] >= 22:
-                    acta_lookup = pd.DataFrame({
-                        "_dni_norm": df_acta_raw.iloc[:, 3].apply(_norm_dni_value),
-                        "_condicion_acta": df_acta_raw.iloc[:, 21].apply(_clean_text),
-                    })
-                    acta_lookup = acta_lookup[acta_lookup["_dni_norm"] != ""].drop_duplicates("_dni_norm", keep="last")
-
             col_dni_res = "Numero de DNI" if "Numero de DNI" in df_resultados.columns else _find_col_flexible(
                 df_resultados, [
                     ["numero", "dni"],
@@ -570,7 +559,7 @@ with tab1:
                     ["cod", "matr"],
                 ])
 
-            if not col_cod and not col_cod_resumen:
+            if not col_cod and not col_cod_resumen and len(df_resumen.columns) <= 2:
                 st.warning("No encontré columna de CÓDIGO (MATRÍCULA/ESTUDIANTE) en RESULTADOS ni RESUMEN. Saldrá vacío.")
                 st.info(f"Columnas RESULTADOS: {list(df_resultados.columns)}")
                 st.info(f"Columnas RESUMEN: {list(df_resumen.columns)}")
@@ -586,8 +575,9 @@ with tab1:
                 lookup = lookup[(lookup["_dni_norm"] != "") & (lookup[out_col] != "")]
                 return lookup[["_dni_norm", out_col]].drop_duplicates("_dni_norm", keep="last")
 
-            codigo_resumen_lookup = _build_code_lookup(df_resumen, col_cod_resumen, "_codigo_matricula_resumen")
-            codigo_resultados_lookup = _build_code_lookup(df_resultados, col_cod, "_codigo_matricula_resultados")
+            col_cod_resumen_pos = df_resumen.columns[2] if len(df_resumen.columns) > 2 else col_cod_resumen
+            col_cond_resumen_pos = df_resumen.columns[25] if len(df_resumen.columns) > 25 else None
+            codigo_resumen_lookup = _build_code_lookup(df_resumen, col_cod_resumen_pos, "_codigo_matricula_resumen")
 
             cols_small = ["_dni_norm"]
             if "Apellido(s)" in df_resultados.columns:
@@ -607,22 +597,11 @@ with tab1:
                 on="_dni_norm",
                 how="left",
             )
-            if not acta_lookup.empty:
-                merged = merged.merge(acta_lookup, on="_dni_norm", how="left")
             if not codigo_resumen_lookup.empty:
                 merged = merged.merge(codigo_resumen_lookup, on="_dni_norm", how="left")
-            if not codigo_resultados_lookup.empty:
-                merged = merged.merge(codigo_resultados_lookup, on="_dni_norm", how="left")
 
             if "_codigo_matricula_resumen" in merged.columns:
                 codigo_estudiante = merged["_codigo_matricula_resumen"].apply(_clean_text)
-                if "_codigo_matricula_resultados" in merged.columns:
-                    codigo_estudiante = codigo_estudiante.mask(
-                        codigo_estudiante.astype(str).str.strip() == "",
-                        merged["_codigo_matricula_resultados"].apply(_clean_text),
-                    )
-            elif "_codigo_matricula_resultados" in merged.columns:
-                codigo_estudiante = merged["_codigo_matricula_resultados"].apply(_clean_text)
             else:
                 codigo_estudiante = pd.Series([""] * len(merged))
 
@@ -648,17 +627,12 @@ with tab1:
             requiere_nivelacion = req.apply(
                 lambda x: "SI" if str(x).strip().upper() in ("REQUIERE NIVELACIÓN", "REQUIERE NIVELACION", "SI") else "NO"
             )
-            col_cond_resumen = "CONDICIÓN" if "CONDICIÓN" in df_resumen.columns else _find_col_flexible(
+            col_cond_resumen = col_cond_resumen_pos or ("CONDICIÓN" if "CONDICIÓN" in df_resumen.columns else _find_col_flexible(
                 df_resumen, [
                     ["condicion"],
                 ]
-            )
+            ))
             condicion = merged[col_cond_resumen].apply(_clean_upper_text) if col_cond_resumen and col_cond_resumen in merged.columns else pd.Series([""] * len(merged))
-            if "_condicion_acta" in merged.columns:
-                condicion = condicion.mask(
-                    condicion.astype(str).str.strip() == "",
-                    merged["_condicion_acta"].apply(_clean_upper_text),
-                )
 
             out_df = pd.DataFrame({
                 "id": None,
