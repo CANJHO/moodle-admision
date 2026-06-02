@@ -1,7 +1,7 @@
 # actas_presentacion.py
-# Genera hojas "ACTA" y "CONSOLIDADO" dentro del MISMO Excel usando una PLANTILLA modelo.
+# Genera hoja "ACTA" dentro del MISMO Excel usando una PLANTILLA modelo.
 # - No reemplaza tu RESULTADOS/RESUMEN: las agrega al final (opcional)
-# - No divide por CHINCHA/ICA: usa TODOS los registros en ambas hojas (ACTA y CONSOLIDADO)
+# - No divide por CHINCHA/ICA: usa TODOS los registros en ACTA
 # - Mantiene el formato del modelo (toma como base Acta_Final_* y Consolidado_* del archivo modelo)
 #
 # Requisitos: pandas, openpyxl
@@ -106,8 +106,6 @@ def build_excel_final_con_actas(
     y devuelve un único Excel final basado en la plantilla del modelo, rellenando:
 
       - Hoja "ACTA"
-      - Hoja "CONSOLIDADO"
-
     Usando TODOS los registros (sin split por sede).
 
     Además, opcionalmente agrega RESULTADOS y RESUMEN dentro del mismo archivo final.
@@ -139,35 +137,42 @@ def build_excel_final_con_actas(
     col_nom = "Nombre" if "Nombre" in df_res.columns else _find_col_flexible(df_res, [["nomb"], ["nombre"]])
     col_mail = "Dirección de correo" if "Dirección de correo" in df_res.columns else _find_col_flexible(df_res, [["correo"], ["mail"], ["email"]])
 
-    # código: matrícula o estudiante (cualquiera)
-    col_cod = None
+    # código: usar solo matrícula, preferentemente desde RESUMEN.
+    col_cod_res = None
+    col_cod_sum = None
     for exact in [
         "Código de Matrícula", "Codigo de Matricula", "CÓDIGO DE MATRÍCULA", "CODIGO DE MATRICULA",
-        "Código de Estudiante", "Codigo de Estudiante", "CÓDIGO DE ESTUDIANTE", "CODIGO DE ESTUDIANTE",
     ]:
         if exact in df_res.columns:
-            col_cod = exact
-            break
-    if not col_cod:
-        col_cod = _find_col_flexible(df_res, [["codigo", "matricula"], ["codigo", "estudiante"], ["cod", "matr"], ["cod", "estud"], ["codigo"]])
+            col_cod_res = exact
+        if exact in df_sum.columns:
+            col_cod_sum = exact
+    if not col_cod_res:
+        col_cod_res = _find_col_flexible(df_res, [["codigo", "matricula"], ["cod", "matr"]])
+    if not col_cod_sum:
+        col_cod_sum = _find_col_flexible(df_sum, [["codigo", "matricula"], ["cod", "matr"]])
+
+    col_cond_sum = "CONDICIÓN" if "CONDICIÓN" in df_sum.columns else _find_col_flexible(df_sum, [["condicion"]])
 
     df_small = df_res[["_dni_norm"]].copy()
     df_small["APELLIDOS"] = df_res[col_ap] if col_ap and col_ap in df_res.columns else ""
     df_small["NOMBRES"] = df_res[col_nom] if col_nom and col_nom in df_res.columns else ""
     df_small["CORREO"] = df_res[col_mail] if col_mail and col_mail in df_res.columns else ""
-    df_small["CODIGO"] = df_res[col_cod] if col_cod and col_cod in df_res.columns else ""
+    df_small["CODIGO_RESULTADOS"] = df_res[col_cod_res] if col_cod_res and col_cod_res in df_res.columns else ""
 
     base = df_sum.merge(df_small, on="_dni_norm", how="left")
+    base["CODIGO"] = base[col_cod_sum] if col_cod_sum and col_cod_sum in base.columns else ""
+    base["CODIGO"] = base["CODIGO"].mask(base["CODIGO"].fillna("").astype(str).str.strip() == "", base["CODIGO_RESULTADOS"])
+    if col_cond_sum and col_cond_sum in base.columns and col_cond_sum != "CONDICIÓN":
+        base["CONDICIÓN"] = base[col_cond_sum]
 
     # 5) abrir plantilla
     wb = openpyxl.load_workbook(modelo_path)
 
-    # 6) seleccionar hojas plantilla del modelo y clonarlas como ACTA / CONSOLIDADO
+    # 6) seleccionar hoja plantilla del modelo y clonarla como ACTA
     acta_tpl_name = _pick_template_sheet(wb, "acta")
-    cons_tpl_name = _pick_template_sheet(wb, "consolidado")
 
     ws_acta_tpl = wb[acta_tpl_name]
-    ws_cons_tpl = wb[cons_tpl_name]
 
     # Si ya existen ACTA/CONSOLIDADO por ejecuciones previas, borrarlas
     for fixed in ["ACTA", "CONSOLIDADO"]:
@@ -177,17 +182,14 @@ def build_excel_final_con_actas(
     ws_acta = wb.copy_worksheet(ws_acta_tpl)
     ws_acta.title = "ACTA"
 
-    ws_cons = wb.copy_worksheet(ws_cons_tpl)
-    ws_cons.title = "CONSOLIDADO"
-
     # Eliminar hojas acta/consolidado originales para que no salgan duplicadas
     for n in list(wb.sheetnames):
         nn = _norm_text(n)
         if nn.startswith(_norm_text("acta_final")) or nn.startswith(_norm_text("consolidado")):
-            if n not in ("ACTA", "CONSOLIDADO"):
+            if n != "ACTA":
                 del wb[n]
 
-    # 7) llenado (misma estructura para ACTA y CONSOLIDADO)
+    # 7) llenado
     def fill_ws(ws, df: pd.DataFrame):
         _clear_sheet_from_row(ws, start_row=2)
 
@@ -234,7 +236,6 @@ def build_excel_final_con_actas(
                 ws.cell(row_idx, 26).value = ""  # MODALIDAD DE INGRESO
 
     fill_ws(ws_acta, base.copy())
-    fill_ws(ws_cons, base.copy())
 
     # 8) (Opcional) agregar RESULTADOS y RESUMEN
     if output_add_resultados_resumen:
