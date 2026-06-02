@@ -768,6 +768,61 @@ with tab2:
 
         return cols
 
+    def _find_flat_moodle_first_row(df_raw: pd.DataFrame):
+        if df_raw.shape[1] < 125:
+            return None
+        for idx, row in df_raw.iterrows():
+            dni = _norm_dni_comm(row.iloc[3] if len(row) > 3 else "")
+            apellidos = _clean_text(row.iloc[0] if len(row) > 0 else "")
+            nombres = _clean_text(row.iloc[1] if len(row) > 1 else "")
+            if len(dni) == 8 and apellidos and nombres:
+                return idx
+        return None
+
+    def _build_flat_moodle_header(n_cols: int):
+        cols = [f"COL_{i}" for i in range(n_cols)]
+        base_cols = {
+            0: "APELLIDOS",
+            1: "NOMBRES",
+            2: "CORREO",
+            3: "DNI",
+            5: "PROGRAMA",
+            6: "DIRECCIÓN LOCAL",
+            7: "AREA",
+            8: "ESTADO_MOODLE",
+            9: "FECHA INICIO",
+            10: "FECHA FIN",
+            11: "DURACIÓN",
+            12: "NOTA_MOODLE",
+            13: "QUIZ_ID",
+            14: "USER_ID",
+            15: "CODIGO",
+        }
+        for idx, name in base_cols.items():
+            if idx < n_cols:
+                cols[idx] = name
+
+        for idx in range(16, min(116, n_cols)):
+            cols[idx] = f"P. {idx - 15} /0.2"
+
+        final_cols = {
+            116: "COMUNICACION_%",
+            117: "HABILIDADES_COMUNICATIVAS_%",
+            118: "MATEMATICA_%",
+            119: "CTA_CIENCIAS_SOCIALES_%",
+            120: "COMUNICACION_PUNT",
+            121: "HABILIDADES_COMUNICATIVAS_PUNT",
+            122: "MATEMATICA_PUNT",
+            123: "CTA_CIENCIAS_SOCIALES_PUNT",
+            124: "PUNTAJE FINAL",
+            125: "PORCENTAJE FINAL",
+        }
+        for idx, name in final_cols.items():
+            if idx < n_cols:
+                cols[idx] = name
+
+        return cols
+
     def _parse_ratio(v):
         x = _safe_float(v)
         return x / 100.0 if x > 1 else x
@@ -787,6 +842,13 @@ with tab2:
             cols = _build_two_row_header(raw)
             df = raw.iloc[5:].copy().reset_index(drop=True)
             df.columns = cols
+
+            if "DNI" not in df.columns:
+                first_data_row = _find_flat_moodle_first_row(raw)
+                if first_data_row is not None:
+                    cols = _build_flat_moodle_header(raw.shape[1])
+                    df = raw.iloc[first_data_row:].copy().reset_index(drop=True)
+                    df.columns = cols
 
             if "DNI" not in df.columns:
                 st.error("No pude detectar la columna DNI en el archivo consolidado.")
