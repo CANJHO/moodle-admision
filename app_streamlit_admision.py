@@ -861,7 +861,7 @@ with tab1:
             )
             condicion = merged["_condicion_resumen_directa"].apply(_clean_upper_text)
             asistio = merged["Asistencia"].apply(_clean_upper_text) if "Asistencia" in merged.columns else pd.Series([""] * len(merged))
-            no_asistio_mask = asistio.str.replace("Í", "I", regex=False).eq("NO ASISTIO")
+            no_asistio_mask = asistio.apply(_norm_text).eq("noasistio")
             condicion = condicion.mask(no_asistio_mask, "NO INGRESÓ")
             requiere_nivelacion = requiere_nivelacion.mask(no_asistio_mask, "NO")
             areas_nivelacion = areas_nivelacion.mask(no_asistio_mask, "[]")
