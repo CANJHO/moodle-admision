@@ -7,6 +7,7 @@ from io import BytesIO
 import tempfile
 import time
 import json
+import importlib
 import pandas as pd
 import unicodedata
 from datetime import datetime
@@ -14,6 +15,7 @@ import zipfile  # ✅ validar .xlsx (zip interno)
 
 # Importamos tu lógica existente desde el script CLI
 import moodle_admision_export as core
+core = importlib.reload(core)
 
 # ✅ Actas Finales (plantilla)
 from actas_presentacion import build_excel_final_con_actas
@@ -548,6 +550,12 @@ if run:
         t0 = time.time()
         rows = []
         open_attempts = []
+        if not hasattr(core, "inspect_user_quiz"):
+            st.error(
+                "El servidor está usando una versión anterior de moodle_admision_export.py. "
+                "Reinicia o vuelve a desplegar la aplicación para cargar el módulo actualizado."
+            )
+            st.stop()
         target_quizzes_by_course = {}
         for q in target_quizzes:
             target_quizzes_by_course.setdefault(q["courseid"], []).append(q)
