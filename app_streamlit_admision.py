@@ -104,6 +104,47 @@ def _clean_upper_text(v) -> str:
     return _clean_text(v).upper()
 
 
+def _read_padron_flexible(uploaded_file) -> pd.DataFrame:
+    xlsx = pd.ExcelFile(uploaded_file)
+    sheet_name = next((sh for sh in xlsx.sheet_names if _norm_text(sh) == "data"), xlsx.sheet_names[0])
+    raw = pd.read_excel(xlsx, sheet_name=sheet_name, header=None)
+
+    header_row = None
+    for idx in range(min(15, len(raw))):
+        values = [_norm_text(v) for v in raw.iloc[idx].tolist() if _clean_text(v)]
+        has_document = any(v in ("dni", "documento", "numerodni", "nrodocumento") for v in values)
+        has_identity = any(v in ("codigo", "codigomatricula", "email", "correo", "email") for v in values)
+        if has_document and has_identity:
+            header_row = idx
+            break
+
+    if header_row is None:
+        return pd.read_excel(xlsx, sheet_name=sheet_name)
+
+    headers = []
+    seen = {}
+    for idx, value in enumerate(raw.iloc[header_row].tolist()):
+        name = _clean_text(value) or f"COL_{idx}"
+        count = seen.get(name, 0)
+        seen[name] = count + 1
+        headers.append(name if count == 0 else f"{name}.{count}")
+
+    df = raw.iloc[header_row + 1:].copy().reset_index(drop=True)
+    df.columns = headers
+    return df
+
+
+def _guess_area_from_program(programa) -> str:
+    p = _norm_text(programa)
+    if any(k in p for k in ["ingenier", "arquitect"]):
+        return "A"
+    if any(k in p for k in ["medicina", "enfermer", "obstetric", "psicolog", "odontolog", "farmac", "tecnologiamedica"]):
+        return "B"
+    if any(k in p for k in ["derecho", "administr", "contabil", "educacion", "comunic", "turismo"]):
+        return "C"
+    return ""
+
+
 def _safe_float(v) -> float:
     if pd.isna(v):
         return 0.0
@@ -300,6 +341,13 @@ st.markdown("---")
 # ---------------------------------------------------------------------
 # BOTÓN PRINCIPAL
 # ---------------------------------------------------------------------
+padron_file = st.file_uploader(
+    "📋 Padrón de postulantes que rendirán en la fecha seleccionada",
+    type=["xlsx"],
+    key="padron_examen_fecha",
+    help="Se usa para incluir solo a los postulantes programados para esta fecha e identificar quiénes no rindieron.",
+)
+
 run = st.button("🚀 Generar Excel (RESULTADOS + RESUMEN)", type="primary")
 
 if run:
@@ -308,6 +356,9 @@ if run:
         st.stop()
     if not course_ids_str.strip():
         st.error("Debes ingresar al menos un **ID de curso**.")
+        st.stop()
+    if padron_file is None:
+        st.error("Debes subir el padrón de postulantes programados para la fecha seleccionada.")
         st.stop()
 
     quiz_map = core.parse_quiz_map(quiz_map_str)
@@ -357,6 +408,90 @@ if run:
         course_ids = [int(x) for x in course_ids_str.split(",") if x.strip()]
         t_from, t_to, tz = core.day_range_epoch(exam_date.isoformat(), tz_offset)
 
+        df_padron = _read_padron_flexible(padron_file)
+        col_padron_dni = _find_col_flexible(df_padron, [["dni"], ["documento"], ["numero", "dni"]])
+        col_padron_codigo = _find_col_flexible(df_padron, [["codigo", "matricula"], ["cod", "matr"], ["codigo"]])
+        col_padron_correo = _find_col_flexible(df_padron, [["correo"], ["email"], ["mail"]])
+        col_padron_area = _find_col_flexible(df_padron, [["area"]])
+        col_padron_fecha = _find_col_flexible(df_padron, [["fecha", "examen"], ["dia", "examen"]])
+        col_padron_programa = _find_col_flexible(df_padron, [["programa", "academico"], ["programa"], ["carrera"]])
+        col_padron_nombre = _find_col_flexible(df_padron, [["apellidos", "nombres"], ["nombre", "completo"], ["nombres"]])
+        col_padron_sede = _find_col_flexible(df_padron, [["sede", "filial"], ["sede"], ["filial"]])
+
+        if not any([col_padron_dni, col_padron_codigo, col_padron_correo]):
+            st.error("El padrón debe tener al menos una columna de DNI, Código de Matrícula o correo.")
+            st.info(f"Columnas detectadas: {list(df_padron.columns)}")
+            st.stop()
+
+        st.info(
+            "Columnas del padrón detectadas: "
+            f"DNI={col_padron_dni or '-'} | Código={col_padron_codigo or '-'} | "
+            f"Correo={col_padron_correo or '-'} | Programa={col_padron_programa or '-'} | "
+            f"Área={col_padron_area or '-'} | Fecha={col_padron_fecha or '-'}"
+        )
+
+        if col_padron_fecha:
+            fechas_padron = pd.to_datetime(df_padron[col_padron_fecha], errors="coerce", dayfirst=True).dt.date
+            df_padron = df_padron[fechas_padron == exam_date].copy()
+            if df_padron.empty:
+                st.error(f"El padrón no contiene postulantes para la fecha {exam_date}.")
+                st.stop()
+            st.info(f"Padrón filtrado por {col_padron_fecha}: {len(df_padron)} postulantes para {exam_date}.")
+        else:
+            st.warning(
+                "El padrón no tiene una columna 'Fecha de examen'. "
+                "Se asumirá que todos los postulantes del archivo corresponden a la fecha seleccionada."
+            )
+
+        padron_dnis = set()
+        padron_codigos = set()
+        padron_correos = set()
+        padron_area_por_dni = {}
+        padron_area_por_codigo = {}
+        padron_area_por_correo = {}
+        padron_records = []
+
+        def _area_letter(v) -> str:
+            area_text = _clean_upper_text(v)
+            for letter in ("A", "B", "C"):
+                if area_text == letter or area_text.endswith(f" {letter}") or area_text.endswith(f"-{letter}"):
+                    return letter
+            return ""
+
+        for idx, row in df_padron.iterrows():
+            dni = _norm_dni_value(row.get(col_padron_dni)) if col_padron_dni else ""
+            codigo = _clean_upper_text(row.get(col_padron_codigo)) if col_padron_codigo else ""
+            correo = _clean_text(row.get(col_padron_correo)).lower() if col_padron_correo else ""
+            area = _area_letter(row.get(col_padron_area)) if col_padron_area else ""
+            if not area and col_padron_programa:
+                area = _guess_area_from_program(row.get(col_padron_programa))
+            padron_records.append({
+                "index": idx,
+                "dni": dni,
+                "codigo": codigo,
+                "correo": correo,
+                "area": area,
+                "nombre": _clean_upper_text(row.get(col_padron_nombre)) if col_padron_nombre else "",
+                "programa": _clean_upper_text(row.get(col_padron_programa)) if col_padron_programa else "",
+                "sede": _clean_upper_text(row.get(col_padron_sede)) if col_padron_sede else "",
+            })
+            if dni:
+                padron_dnis.add(dni)
+                if area:
+                    padron_area_por_dni[dni] = area
+            if codigo:
+                padron_codigos.add(codigo)
+                if area:
+                    padron_area_por_codigo[codigo] = area
+            if correo:
+                padron_correos.add(correo)
+                if area:
+                    padron_area_por_correo[correo] = area
+
+        if not any([padron_dnis, padron_codigos, padron_correos]):
+            st.error("El padrón no contiene postulantes válidos para procesar.")
+            st.stop()
+
         st.info(f"Cursos: {course_ids} | Día: {exam_date} (tz {tz_offset})")
         st.info(f"Quiz→Área: {quiz_map}")
 
@@ -368,6 +503,8 @@ if run:
             status.update(label=f"Quizzes a procesar: {len(target_quizzes)}", state="complete")
 
         course_users = {}
+        user_area_by_id = {}
+        matched_padron_indices = set()
         total_users = 0
         prog_bar = st.progress(0, text="Cargando usuarios por curso…")
         for i, cid in enumerate(course_ids, start=1):
@@ -375,18 +512,45 @@ if run:
                 base_url, TOKEN, cid,
                 only_roles=[x.strip() for x in only_roles.split(",") if x.strip()],
             )
-            course_users[cid] = us
-            total_users += len(us)
-            prog_bar.progress(i / len(course_ids), text=f"Curso {cid}: {len(us)} usuarios")
+            usuarios_fecha = []
+            for u in us:
+                custom = u.get("custom", {})
+                dni = _norm_dni_value(custom.get(core.CF_DNI, ""))
+                codigo = _clean_upper_text(custom.get(core.CF_COD_MAT, ""))
+                correo = _clean_text(u.get("email", "")).lower()
+                if dni in padron_dnis or codigo in padron_codigos or correo in padron_correos:
+                    usuarios_fecha.append(u)
+                    user_area_by_id[u["id"]] = (
+                        padron_area_por_dni.get(dni)
+                        or padron_area_por_codigo.get(codigo)
+                        or padron_area_por_correo.get(correo)
+                        or ""
+                    )
+                    for record in padron_records:
+                        if (
+                            (dni and record["dni"] == dni)
+                            or (codigo and record["codigo"] == codigo)
+                            or (correo and record["correo"] == correo)
+                        ):
+                            matched_padron_indices.add(record["index"])
+            course_users[cid] = usuarios_fecha
+            total_users += len(usuarios_fecha)
+            prog_bar.progress(i / len(course_ids), text=f"Curso {cid}: {len(usuarios_fecha)} postulantes del padrón")
         prog_bar.empty()
 
-        if total_users == 0 or not target_quizzes:
-            st.warning("Nada para procesar (sin usuarios o sin quizzes objetivo).")
+        if not target_quizzes:
+            st.warning("Nada para procesar: no hay quizzes objetivo.")
             st.stop()
+        if total_users == 0:
+            st.warning("No se encontraron usuarios del padrón en Moodle. Se intentará incluirlos como NO ASISTIÓ.")
 
         st.write("⚙️ Procesando intentos (esto puede tardar)…")
         t0 = time.time()
         rows = []
+        open_attempts = []
+        target_quizzes_by_course = {}
+        for q in target_quizzes:
+            target_quizzes_by_course.setdefault(q["courseid"], []).append(q)
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
         futs = []
@@ -395,19 +559,84 @@ if run:
                 area_letter = quiz_map.get(q["quizid"])
                 users = course_users.get(q["courseid"], [])
                 for u in users:
-                    futs.append(ex.submit(core._process_user_quiz, base_url, TOKEN, q, area_letter, u, t_from, t_to, tz))
+                    area_padron = user_area_by_id.get(u["id"], "")
+                    include_no_attempt = (
+                        len(target_quizzes_by_course.get(q["courseid"], [])) == 1
+                        or area_padron == area_letter
+                    )
+                    futs.append(ex.submit(
+                        core.inspect_user_quiz,
+                        base_url, TOKEN, q, area_letter, u, t_from, t_to, tz,
+                        include_no_attempt,
+                    ))
 
             done = 0
             step_bar = st.progress(0.0)
             for fut in as_completed(futs):
                 res = fut.result()
-                if res:
-                    rows.extend(res)
+                if res.get("rows"):
+                    rows.extend(res["rows"])
+                if res.get("open_attempts"):
+                    open_attempts.extend(res["open_attempts"])
                 done += 1
                 step_bar.progress(done / max(1, len(futs)))
         step_bar.empty()
 
-        st.success(f"Intentos dentro del día: {len(rows)}")
+        quizzes_by_area = {}
+        for q in target_quizzes:
+            quizzes_by_area.setdefault(quiz_map.get(q["quizid"]), []).append(q)
+        padron_no_encontrados = []
+        for record in padron_records:
+            if record["index"] in matched_padron_indices:
+                continue
+            area_quizzes = quizzes_by_area.get(record["area"], [])
+            if len(area_quizzes) != 1:
+                padron_no_encontrados.append(record)
+                continue
+            pseudo_user = {
+                "id": f"padron-{record['index']}",
+                "firstname": "",
+                "lastname": record["nombre"],
+                "email": record["correo"],
+                "custom": {
+                    core.CF_DNI: record["dni"],
+                    core.CF_COD_MAT: record["codigo"],
+                    core.CF_PROG: record["programa"],
+                    core.CF_SEDE: record["sede"],
+                },
+            }
+            rows.append(core.build_row_no_attempt(pseudo_user, area_quizzes[0], record["area"]))
+
+        if open_attempts:
+            st.error(
+                "No se puede generar la descarga porque Moodle todavía reporta "
+                f"{len(open_attempts)} intento(s) en curso o vencido(s)."
+            )
+            st.dataframe(pd.DataFrame(open_attempts), use_container_width=True)
+            st.info("Finaliza o cierra esos intentos en Moodle y vuelve a generar el reporte.")
+            st.stop()
+
+        asistentes = sum(1 for row in rows if row.get("Asistencia") == "ASISTIÓ")
+        no_asistentes = sum(1 for row in rows if row.get("Asistencia") == "NO ASISTIÓ")
+        st.success(f"Registros: {len(rows)} | Asistieron: {asistentes} | No asistieron: {no_asistentes}")
+
+        if padron_no_encontrados:
+            st.warning(
+                f"{len(padron_no_encontrados)} postulante(s) del padrón no se encontraron en Moodle "
+                "y no pudieron asignarse a un único quiz por área."
+            )
+            st.dataframe(pd.DataFrame(padron_no_encontrados), use_container_width=True)
+
+        usuarios_sin_area = [
+            u for users in course_users.values() for u in users
+            if not user_area_by_id.get(u["id"], "")
+        ]
+        if usuarios_sin_area and any(len(qzs) > 1 for qzs in target_quizzes_by_course.values()):
+            st.warning(
+                "Algunos postulantes del padrón no tienen Área. Si no rindieron y su curso tiene varios quizzes, "
+                "no será posible asignarlos a un examen. Agrega la columna Área al padrón."
+            )
+
         if not rows:
             st.warning("No se encontraron intentos ese día.")
             st.stop()

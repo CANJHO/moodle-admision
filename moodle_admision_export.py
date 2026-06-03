@@ -166,6 +166,24 @@ def get_user_attempts_in_range(base_url: str, token: str, quizid: int, userid: i
             out.append(a)
     return out
 
+def get_user_attempts_status_in_range(base_url: str, token: str, quizid: int, userid: int,
+                                      t_from: int, t_to: int) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    tries = ws(base_url, token, "mod_quiz_get_user_attempts", quizid=quizid, userid=userid)
+    attempts = tries.get("attempts", []) if isinstance(tries, dict) else tries
+    finished = []
+    open_attempts = []
+    for a in attempts:
+        ts = a.get("timestart") or 0
+        tf = a.get("timefinish") or 0
+        state = str(a.get("state", "")).lower().strip()
+        if tf == 0 and t_from <= ts <= t_to:
+            open_attempts.append(a)
+        elif tf and ((t_from <= tf <= t_to) or (t_from <= ts <= t_to)):
+            finished.append(a)
+        elif state in ("inprogress", "overdue") and t_from <= ts <= t_to:
+            open_attempts.append(a)
+    return finished, open_attempts
+
 def get_attempt_review(base_url: str, token: str, attemptid: int) -> Dict[str, Any]:
     return ws(base_url, token, "mod_quiz_get_attempt_review", attemptid=attemptid)
 
@@ -250,6 +268,7 @@ def build_row_from_review(user: Dict[str,Any], quiz: Dict[str,Any], area_letter:
         "_quizid": quiz["quizid"],
         "_courseid": quiz["courseid"],
         "_attemptid": attempt["id"],
+        "Asistencia": "ASISTIÓ",
     }
     # preguntas
     for i in range(1, max_questions+1):
@@ -292,6 +311,41 @@ def build_row_from_review(user: Dict[str,Any], quiz: Dict[str,Any], area_letter:
     base["%DE PREGUNTAS RESPONDIDAS"] = responded / 100.0
     base["%DE PREGUNTAS NO RESPONDIDAS"] = (100 - responded) / 100.0
 
+    return base
+
+def build_row_no_attempt(user: Dict[str,Any], quiz: Dict[str,Any], area_letter: str,
+                         max_questions: int = 100) -> Dict[str,Any]:
+    cf = user.get("custom", {})
+    base = {
+        "Apellido(s)": user.get("lastname", ""),
+        "Nombre": user.get("firstname", ""),
+        "Dirección de correo": user.get("email", ""),
+        "Numero de DNI": cf.get(CF_DNI, "") or "",
+        "Código de Matrícula": cf.get(CF_COD_MAT, "") or cf.get(CF_COD_MAT.upper(), "") or "",
+        "Programa Académico": cf.get(CF_PROG, "") or cf.get(CF_PROG.upper(), "") or "",
+        "Sede o Filial": cf.get(CF_SEDE, "") or cf.get(CF_SEDE.upper(), "") or "",
+        "Área": area_letter,
+        "Estado": "NO RINDIÓ",
+        "Comenzado el": "",
+        "Finalizado": "",
+        "Tiempo requerido": "",
+        "Calificación/20": 0,
+        "_quizid": quiz["quizid"],
+        "_courseid": quiz["courseid"],
+        "_attemptid": "",
+        "Asistencia": "NO ASISTIÓ",
+    }
+    for i in range(1, max_questions + 1):
+        base[f"P. {i} /0.2"] = None
+    for col in [
+        "% COMUNICACIÓN", "% HABILIDADES COMUNICATIVAS", "% MATEMÁTICA", "% CTA/CCSS",
+        "P. COMUNICACIÓN", "P. HABILIDADES COMUNICATIVAS", "P. MATEMÁTICA", "P. CTA/CCSS",
+        "PUNTAJE", "%DE PREGUNTAS RESPONDIDAS", "%DE PREGUNTAS NO RESPONDIDAS",
+    ]:
+        base[col] = 0.0
+    base["PREGUNTAS RESPONDIDAS"] = 0
+    base["PREGUNTAS NO RESPONDIDAS"] = max_questions
+    base["%DE PREGUNTAS NO RESPONDIDAS"] = 1.0
     return base
 
 # -------- CRITERIOS por Área (para RESUMEN) --------
@@ -357,6 +411,8 @@ def write_excel_all_in_one(
     for _, r in df.iterrows():
         area = str(r.get("Área", "")).upper().strip()
         crit = criteria_by_area.get(area, {})
+        asistencia = str(r.get("Asistencia", "ASISTIÓ") or "ASISTIÓ").upper().strip()
+        asistio = asistencia == "ASISTIÓ"
 
         # % ya calculados en RESULTADOS (0.0–1.0)
         pct_com = float(r.get("% COMUNICACIÓN", 0) or 0)
@@ -381,7 +437,7 @@ def write_excel_all_in_one(
         # ---------- CONDICIÓN ----------
         # INGRESÓ si la nota (Calificación/20) es > 0
         grade = float(r.get("Calificación/20", 0) or 0)
-        condicion = "INGRESÓ" if grade > 0 else ""
+        condicion = "INGRESÓ" if asistio and grade > 0 else ""
 
         # ---------- UMBRALES DE NIVELACIÓN POR CURSO ----------
         # Si no se pasó nada desde la UI, usamos el umbral base (todo 0.30)
@@ -393,13 +449,13 @@ def write_excel_all_in_one(
 
         # ---------- NIVELACIÓN POR CURSO ----------
         # Regla: si % obtenido es <= umbral ⇒ va a nivelación
-        com_nivel = "COMUNICACIÓN" if pct_com <= thr_com else ""
-        hab_nivel = "HABILIDADES COMUNICATIVAS" if pct_hab <= thr_hab else ""
-        mat_nivel = "MATEMATICA" if pct_mat <= thr_mat else ""  # nombre de columna en plantilla
+        com_nivel = "COMUNICACIÓN" if asistio and pct_com <= thr_com else ""
+        hab_nivel = "HABILIDADES COMUNICATIVAS" if asistio and pct_hab <= thr_hab else ""
+        mat_nivel = "MATEMATICA" if asistio and pct_mat <= thr_mat else ""  # nombre de columna en plantilla
 
         cta_nivel = ""
         ccss_nivel = ""
-        if pct_cta <= thr_cta:
+        if asistio and pct_cta <= thr_cta:
             # Para Área C es CCSS (Ciencias Sociales), para A y B es CTA
             if area == "C":
                 ccss_nivel = "CIENCIAS SOCIALES"
@@ -417,7 +473,7 @@ def write_excel_all_in_one(
             "Programa Académico": r.get("Programa Académico",""),
             "Sede o Filial": r.get("Sede o Filial",""),
             "Área": area,
-            "Asistencia": "ASISTIÓ",
+            "Asistencia": asistencia,
 
             # COM
             "COMUNICACIÓN": p_com,
@@ -606,16 +662,37 @@ def main():
 
 def _process_user_quiz(base_url: str, token: str, quiz: Dict[str,Any], area_letter: str,
                        user: Dict[str,Any], t_from: int, t_to: int, tz: timezone) -> List[Dict[str,Any]]:
-    out = []
+    result = inspect_user_quiz(base_url, token, quiz, area_letter, user, t_from, t_to, tz)
+    return result["rows"]
+
+def inspect_user_quiz(base_url: str, token: str, quiz: Dict[str,Any], area_letter: str,
+                      user: Dict[str,Any], t_from: int, t_to: int, tz: timezone,
+                      include_no_attempt: bool = False) -> Dict[str,Any]:
+    result = {"rows": [], "open_attempts": []}
     try:
-        attempts = get_user_attempts_in_range(base_url, token, quiz["quizid"], user["id"], t_from, t_to)
+        attempts, open_attempts = get_user_attempts_status_in_range(
+            base_url, token, quiz["quizid"], user["id"], t_from, t_to
+        )
         for a in attempts:
             review = get_attempt_review(base_url, token, a["id"])
-            out.append(build_row_from_review(user, quiz, area_letter, a, review, tz))
+            result["rows"].append(build_row_from_review(user, quiz, area_letter, a, review, tz))
+        for a in open_attempts:
+            result["open_attempts"].append({
+                "Apellidos y nombres": f"{user.get('lastname', '')} {user.get('firstname', '')}".strip(),
+                "DNI": user.get("custom", {}).get(CF_DNI, "") or "",
+                "Código de Matrícula": user.get("custom", {}).get(CF_COD_MAT, "") or "",
+                "Área": area_letter,
+                "Quiz": quiz.get("quizname", ""),
+                "Estado": a.get("state", ""),
+                "Comenzado el": datetime.fromtimestamp(a.get("timestart") or 0, tz).strftime("%Y-%m-%d %H:%M:%S"),
+                "Intento ID": a.get("id", ""),
+            })
+        if include_no_attempt and not attempts and not open_attempts:
+            result["rows"].append(build_row_no_attempt(user, quiz, area_letter))
     except Exception as e:
         # para robustez, no detenemos todo por un usuario
         print(f"[WARN] usuario {user.get('id')} quiz {quiz['quizid']}: {e}")
-    return out
+    return result
 
 if __name__ == "__main__":
     try:
