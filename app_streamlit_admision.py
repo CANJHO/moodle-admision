@@ -860,6 +860,11 @@ with tab1:
                 lambda x: "SI" if str(x).strip().upper() in ("REQUIERE NIVELACIÓN", "REQUIERE NIVELACION", "SI") else "NO"
             )
             condicion = merged["_condicion_resumen_directa"].apply(_clean_upper_text)
+            asistio = merged["Asistencia"].apply(_clean_upper_text) if "Asistencia" in merged.columns else pd.Series([""] * len(merged))
+            no_asistio_mask = asistio.str.replace("Í", "I", regex=False).eq("NO ASISTIO")
+            condicion = condicion.mask(no_asistio_mask, "NO INGRESÓ")
+            requiere_nivelacion = requiere_nivelacion.mask(no_asistio_mask, "NO")
+            areas_nivelacion = areas_nivelacion.mask(no_asistio_mask, "[]")
 
             out_df = pd.DataFrame({
                 "id": None,
@@ -873,7 +878,7 @@ with tab1:
                 "local_examen": merged["Sede o Filial"].apply(_clean_upper_text) if "Sede o Filial" in merged.columns else "",
                 "modalidad_examen": "VIRTUAL",
                 "puntaje": pd.to_numeric(merged["TOTAL"], errors="coerce").fillna(0).astype(int) if "TOTAL" in merged.columns else 0,
-                "asistio": merged["Asistencia"].apply(_clean_upper_text) if "Asistencia" in merged.columns else "",
+                "asistio": asistio,
                 "condicion": condicion,
                 "requiere_nivelacion": requiere_nivelacion.astype(str).str.upper(),
                 "areas_nivelacion": areas_nivelacion.astype(str),
