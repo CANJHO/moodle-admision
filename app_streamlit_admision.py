@@ -107,6 +107,8 @@ def _norm_dni_value(v) -> str:
     digits = "".join(ch for ch in s if ch.isdigit())
     if digits == "":
         return ""
+    if len(digits) > 8 and set(digits[:-8]) <= {"0"}:
+        digits = digits[-8:]
     if len(digits) < 8:
         digits = digits.zfill(8)
     return digits
@@ -1004,6 +1006,8 @@ with tab2:
         digits = "".join(ch for ch in s if ch.isdigit())
         if not digits:
             return ""
+        if len(digits) > 8 and set(digits[:-8]) <= {"0"}:
+            digits = digits[-8:]
         return digits.zfill(8) if len(digits) < 8 else digits
 
     def _find_comision_header_row(df_raw: pd.DataFrame):
