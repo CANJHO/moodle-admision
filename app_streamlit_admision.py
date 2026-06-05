@@ -939,6 +939,13 @@ with tab2:
         key="comision_excel",
     )
 
+    com_moodle_file = st.file_uploader(
+        "📍 Excel Moodle/Acta para tomar Sede o Filial (opcional)",
+        type=["xlsx"],
+        key="comision_moodle_sede_excel",
+        help="Sube el ACTA_FINAL_Y_RESUMEN o Excel Moodle que tenga la columna Sede o Filial. Se cruza por DNI para llenar local_examen.",
+    )
+
     c1, c2, c3 = st.columns(3)
     with c1:
         periodo_value_com = st.text_input("Periodo", value="2026-1", key="periodo_comision")
@@ -1046,6 +1053,52 @@ with tab2:
         if area_norm in ("areac", "c") or "human" in area_norm:
             return "C"
         return area
+
+    def _build_sede_lookup_from_excel(uploaded_file) -> pd.DataFrame:
+        if uploaded_file is None:
+            return pd.DataFrame(columns=["DNI", "_sede_moodle"])
+
+        try:
+            uploaded_file.seek(0)
+        except Exception:
+            pass
+
+        xlsx = pd.ExcelFile(uploaded_file)
+        preferred = ["RESULTADOS", "RESUMEN", "ACTA"]
+        sheet_names = [sh for sh in preferred if sh in xlsx.sheet_names] + [
+            sh for sh in xlsx.sheet_names if sh not in preferred
+        ]
+
+        for sheet in sheet_names:
+            df_src = pd.read_excel(xlsx, sheet_name=sheet)
+            if df_src.empty:
+                continue
+
+            col_dni_src = (
+                "Numero de DNI" if "Numero de DNI" in df_src.columns
+                else ("DNI" if "DNI" in df_src.columns else _find_col_flexible(
+                    df_src,
+                    [["numero", "dni"], ["dni"], ["documento"], ["nro", "dni"]],
+                ))
+            )
+            col_sede_src = (
+                "Sede o Filial" if "Sede o Filial" in df_src.columns
+                else _find_col_flexible(
+                    df_src,
+                    [["sede", "filial"], ["sede"], ["filial"]],
+                )
+            )
+
+            if col_dni_src and col_sede_src:
+                lookup = pd.DataFrame({
+                    "DNI": df_src[col_dni_src].apply(_norm_dni_comm),
+                    "_sede_moodle": df_src[col_sede_src].apply(_clean_upper_text),
+                })
+                lookup = lookup[(lookup["DNI"] != "") & (lookup["_sede_moodle"] != "")]
+                if not lookup.empty:
+                    return lookup.drop_duplicates("DNI", keep="last")
+
+        return pd.DataFrame(columns=["DNI", "_sede_moodle"])
 
     if convertir_com:
         if com_file is None:
@@ -1157,6 +1210,20 @@ with tab2:
             condicion = df[col_cond].apply(_clean_upper_text) if col_cond else pd.Series([""] * len(df))
             codigo_estudiante = df[col_cod].apply(_clean_upper_text) if col_cod else pd.Series([""] * len(df))
             puntaje = pd.to_numeric(df[col_total], errors="coerce").fillna(0).astype(int)
+            local_examen = df[col_sede].apply(_clean_upper_text) if col_sede else pd.Series([""] * len(df))
+
+            sede_lookup = _build_sede_lookup_from_excel(com_moodle_file)
+            if not sede_lookup.empty:
+                df = df.merge(sede_lookup, on="DNI", how="left")
+                sede_moodle = df["_sede_moodle"].apply(_clean_upper_text)
+                local_examen = local_examen.mask(sede_moodle != "", sede_moodle)
+                sedes_encontradas = (sede_moodle != "").sum()
+                st.info(f"Sedes Moodle/Acta encontradas por DNI: {sedes_encontradas} / {len(df)}")
+            elif local_examen.apply(_norm_text).eq("virtual").any():
+                st.warning(
+                    "El archivo de comisión trae DIRECCIÓN LOCAL como VIRTUAL. "
+                    "Para llenar local_examen con la sede real, sube el Excel Moodle/Acta con la columna Sede o Filial."
+                )
 
             out_df = pd.DataFrame({
                 "id": None,
@@ -1167,7 +1234,7 @@ with tab2:
                 "dni": df[col_dni].apply(_norm_dni_comm),
                 "area": df[col_area].apply(_area_code_comision),
                 "programa": df[col_prog].apply(_clean_upper_text),
-                "local_examen": df[col_sede].apply(_clean_upper_text) if col_sede else "",
+                "local_examen": local_examen,
                 "modalidad_examen": "VIRTUAL",
                 "puntaje": puntaje,
                 "asistio": asistio,
