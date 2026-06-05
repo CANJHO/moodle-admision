@@ -1168,11 +1168,12 @@ with tab2:
                 "area": df[col_area].apply(_area_code_comision),
                 "programa": df[col_prog].apply(_clean_upper_text),
                 "local_examen": df[col_sede].apply(_clean_upper_text) if col_sede else "",
+                "modalidad_examen": "VIRTUAL",
                 "puntaje": puntaje,
                 "asistio": asistio,
                 "condicion": condicion,
                 "requiere_nivelacion": requiere_nivelacion.astype(str).str.upper(),
-                "areas_nivelacion": areas_nivelacion.astype(str).str.upper(),
+                "areas_nivelacion": areas_nivelacion.astype(str),
                 "fecha_registro": fecha_registro_value_com,
                 "estado": 1,
             })
