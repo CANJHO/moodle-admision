@@ -492,7 +492,10 @@ if run:
                 st.error("El padrón no contiene postulantes válidos para procesar.")
                 st.stop()
         else:
-            st.info("No se subió padrón. Se procesarán los usuarios matriculados en Moodle como antes.")
+            st.info(
+                "No se subió padrón. El reporte incluirá solo a quienes tengan intento finalizado "
+                "en la fecha seleccionada; no se agregarán NO ASISTIÓ."
+            )
 
         st.info(f"Cursos: {course_ids} | Día: {exam_date} (tz {tz_offset})")
         st.info(f"Quiz→Área: {quiz_map}")
@@ -635,7 +638,10 @@ if run:
 
         asistentes = sum(1 for row in rows if row.get("Asistencia") == "ASISTIÓ")
         no_asistentes = sum(1 for row in rows if row.get("Asistencia") == "NO ASISTIÓ")
-        st.success(f"Registros: {len(rows)} | Asistieron: {asistentes} | No asistieron: {no_asistentes}")
+        if usar_padron:
+            st.success(f"Registros: {len(rows)} | Asistieron: {asistentes} | No asistieron: {no_asistentes}")
+        else:
+            st.success(f"Intentos finalizados encontrados en la fecha: {asistentes}")
 
         if padron_no_encontrados:
             st.warning(
