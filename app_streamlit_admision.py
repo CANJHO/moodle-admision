@@ -1016,6 +1016,17 @@ with tab2:
                 return idx
         return None
 
+    def _find_comision_header_rows(df_raw: pd.DataFrame):
+        rows = []
+        for idx in range(len(df_raw)):
+            row_norm = [_norm_comm(v) for v in df_raw.iloc[idx].fillna("").tolist()]
+            has_dni = "dni" in row_norm
+            has_apellidos = "apellidos" in row_norm
+            has_nombres = "nombres" in row_norm
+            if has_dni and has_apellidos and has_nombres:
+                rows.append(idx)
+        return rows
+
     def _build_two_row_header(df_raw: pd.DataFrame, header_row_idx: int = 3):
         h1 = df_raw.iloc[header_row_idx].fillna("")
         h2 = df_raw.iloc[header_row_idx + 1].fillna("") if header_row_idx + 1 < len(df_raw) else pd.Series([""] * df_raw.shape[1])
@@ -1059,6 +1070,31 @@ with tab2:
                 cols.append(f"COL_{len(cols)}")
 
         return cols
+
+    def _read_comision_blocks(df_raw: pd.DataFrame) -> pd.DataFrame:
+        header_rows = _find_comision_header_rows(df_raw)
+        if not header_rows:
+            header_rows = [3]
+
+        blocks = []
+        for pos, header_idx in enumerate(header_rows):
+            next_header = header_rows[pos + 1] if pos + 1 < len(header_rows) else len(df_raw)
+            cols = _build_two_row_header(df_raw, header_idx)
+            block = df_raw.iloc[header_idx + 2:next_header].copy().reset_index(drop=True)
+            block = block.iloc[:, :len(cols)]
+            block.columns = cols
+
+            if "DNI" not in block.columns:
+                continue
+
+            block["DNI"] = block["DNI"].apply(_norm_dni_comm)
+            block = block[block["DNI"].str.len().eq(8)].copy()
+            if not block.empty:
+                blocks.append(block)
+
+        if not blocks:
+            return pd.DataFrame()
+        return pd.concat(blocks, ignore_index=True)
 
     def _parse_ratio(v):
         x = _safe_float(v)
@@ -1129,20 +1165,13 @@ with tab2:
                 st.error("El archivo no tiene la estructura esperada.")
                 st.stop()
 
-            header_row_idx = _find_comision_header_row(raw)
-            if header_row_idx is None:
-                header_row_idx = 3
+            df = _read_comision_blocks(raw)
 
-            cols = _build_two_row_header(raw, header_row_idx)
-            df = raw.iloc[header_row_idx + 2:].copy().reset_index(drop=True)
-            df.columns = cols
-
-            if "DNI" not in df.columns:
+            if df.empty or "DNI" not in df.columns:
                 st.error("No pude detectar la columna DNI en el archivo consolidado.")
-                st.info(f"Columnas detectadas: {list(df.columns)}")
+                st.info("Revisa que el archivo tenga bloques con encabezados DNI, APELLIDOS y NOMBRES.")
                 st.stop()
 
-            df["DNI"] = df["DNI"].apply(_norm_dni_comm)
             if (df["DNI"] != "").sum() == 0:
                 best_dni_col = None
                 best_dni_count = 0
