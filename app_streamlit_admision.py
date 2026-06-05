@@ -976,9 +976,19 @@ with tab2:
             return ""
         return digits.zfill(8) if len(digits) < 8 else digits
 
-    def _build_two_row_header(df_raw: pd.DataFrame):
-        h1 = df_raw.iloc[3].fillna("")
-        h2 = df_raw.iloc[4].fillna("")
+    def _find_comision_header_row(df_raw: pd.DataFrame):
+        for idx in range(len(df_raw)):
+            row_norm = [_norm_comm(v) for v in df_raw.iloc[idx].fillna("").tolist()]
+            has_dni = "dni" in row_norm
+            has_apellidos = "apellidos" in row_norm
+            has_nombres = "nombres" in row_norm
+            if has_dni and has_apellidos and has_nombres:
+                return idx
+        return None
+
+    def _build_two_row_header(df_raw: pd.DataFrame, header_row_idx: int = 3):
+        h1 = df_raw.iloc[header_row_idx].fillna("")
+        h2 = df_raw.iloc[header_row_idx + 1].fillna("") if header_row_idx + 1 < len(df_raw) else pd.Series([""] * df_raw.shape[1])
         cols = []
 
         current_main = ""
@@ -1008,9 +1018,9 @@ with tab2:
             elif main_norm == "matematica" and sub_norm == "":
                 cols.append("MATEMATICA_%")
 
-            elif main_norm == "cta" and sub_norm.startswith("punt"):
+            elif main_norm in ("cta", "cienciasociales") and sub_norm.startswith("punt"):
                 cols.append("CTA_CIENCIAS_SOCIALES_PUNT")
-            elif main_norm == "cta" and sub_norm == "":
+            elif main_norm in ("cta", "cienciasociales") and sub_norm == "":
                 cols.append("CTA_CIENCIAS_SOCIALES_%")
 
             elif a:
@@ -1024,6 +1034,19 @@ with tab2:
         x = _safe_float(v)
         return x / 100.0 if x > 1 else x
 
+    def _area_code_comision(v) -> str:
+        area = _clean_upper_text(v)
+        area_norm = _norm_comm(area)
+        if area in ("A", "B", "C"):
+            return area
+        if "ingenier" in area_norm:
+            return "A"
+        if area_norm in ("areab", "b") or "salud" in area_norm:
+            return "B"
+        if area_norm in ("areac", "c") or "human" in area_norm:
+            return "C"
+        return area
+
     if convertir_com:
         if com_file is None:
             st.error("Primero sube el Excel de la comisión.")
@@ -1036,8 +1059,12 @@ with tab2:
                 st.error("El archivo no tiene la estructura esperada.")
                 st.stop()
 
-            cols = _build_two_row_header(raw)
-            df = raw.iloc[5:].copy().reset_index(drop=True)
+            header_row_idx = _find_comision_header_row(raw)
+            if header_row_idx is None:
+                header_row_idx = 3
+
+            cols = _build_two_row_header(raw, header_row_idx)
+            df = raw.iloc[header_row_idx + 2:].copy().reset_index(drop=True)
             df.columns = cols
 
             if "DNI" not in df.columns:
@@ -1112,7 +1139,7 @@ with tab2:
 
                 val_cta = _parse_ratio(row.get("CTA_CIENCIAS_SOCIALES_%"))
                 if val_cta <= threshold_decimal:
-                    area_actual = _clean_text(row.get(col_area)).upper()
+                    area_actual = _area_code_comision(row.get(col_area))
                     if area_actual == "C":
                         cursos.append({"curso": "CIENCIAS SOCIALES"})
                     else:
@@ -1138,7 +1165,7 @@ with tab2:
                 "apellidos": df[col_ap].apply(_clean_upper_text),
                 "nombres": df[col_nom].apply(_clean_upper_text),
                 "dni": df[col_dni].apply(_norm_dni_comm),
-                "area": df[col_area].apply(_clean_upper_text),
+                "area": df[col_area].apply(_area_code_comision),
                 "programa": df[col_prog].apply(_clean_upper_text),
                 "local_examen": df[col_sede].apply(_clean_upper_text) if col_sede else "",
                 "puntaje": puntaje,
