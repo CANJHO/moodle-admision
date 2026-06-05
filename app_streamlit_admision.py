@@ -939,11 +939,11 @@ with tab2:
         key="comision_excel",
     )
 
-    com_moodle_file = st.file_uploader(
-        "📍 Excel Moodle/Acta para tomar Sede o Filial (opcional)",
+    com_sede_file = st.file_uploader(
+        "📍 Padrón para tomar Sede o Filial (opcional)",
         type=["xlsx"],
-        key="comision_moodle_sede_excel",
-        help="Sube el ACTA_FINAL_Y_RESUMEN o Excel Moodle que tenga la columna Sede o Filial. Se cruza por DNI para llenar local_examen.",
+        key="comision_padron_sede_excel",
+        help="Sube el padrón que tenga DOCUMENTO/DNI y SEDE/FILIAL. Se cruza por DNI para llenar local_examen.",
     )
 
     c1, c2, c3 = st.columns(3)
@@ -1056,7 +1056,7 @@ with tab2:
 
     def _build_sede_lookup_from_excel(uploaded_file) -> pd.DataFrame:
         if uploaded_file is None:
-            return pd.DataFrame(columns=["DNI", "_sede_moodle"])
+            return pd.DataFrame(columns=["DNI", "_sede_padron"])
 
         try:
             uploaded_file.seek(0)
@@ -1064,7 +1064,7 @@ with tab2:
             pass
 
         xlsx = pd.ExcelFile(uploaded_file)
-        preferred = ["RESULTADOS", "RESUMEN", "ACTA"]
+        preferred = ["DATA", "RESULTADOS", "RESUMEN", "ACTA"]
         sheet_names = [sh for sh in preferred if sh in xlsx.sheet_names] + [
             sh for sh in xlsx.sheet_names if sh not in preferred
         ]
@@ -1085,20 +1085,20 @@ with tab2:
                 "Sede o Filial" if "Sede o Filial" in df_src.columns
                 else _find_col_flexible(
                     df_src,
-                    [["sede", "filial"], ["sede"], ["filial"]],
+                    [["sede", "filial"], ["direccion", "local"], ["sede"], ["filial"]],
                 )
             )
 
             if col_dni_src and col_sede_src:
                 lookup = pd.DataFrame({
                     "DNI": df_src[col_dni_src].apply(_norm_dni_comm),
-                    "_sede_moodle": df_src[col_sede_src].apply(_clean_upper_text),
+                    "_sede_padron": df_src[col_sede_src].apply(_clean_upper_text),
                 })
-                lookup = lookup[(lookup["DNI"] != "") & (lookup["_sede_moodle"] != "")]
+                lookup = lookup[(lookup["DNI"] != "") & (lookup["_sede_padron"] != "")]
                 if not lookup.empty:
                     return lookup.drop_duplicates("DNI", keep="last")
 
-        return pd.DataFrame(columns=["DNI", "_sede_moodle"])
+        return pd.DataFrame(columns=["DNI", "_sede_padron"])
 
     if convertir_com:
         if com_file is None:
@@ -1126,6 +1126,19 @@ with tab2:
                 st.stop()
 
             df["DNI"] = df["DNI"].apply(_norm_dni_comm)
+            if (df["DNI"] != "").sum() == 0:
+                best_dni_col = None
+                best_dni_count = 0
+                for candidate in df.columns:
+                    normalized = df[candidate].apply(_norm_dni_comm)
+                    count = normalized.str.len().eq(8).sum()
+                    if count > best_dni_count:
+                        best_dni_col = candidate
+                        best_dni_count = count
+                if best_dni_col and best_dni_count > 0:
+                    df["DNI"] = df[best_dni_col].apply(_norm_dni_comm)
+                    st.info(f"Usé la columna '{best_dni_col}' como DNI ({best_dni_count} registros detectados).")
+
             df = df[df["DNI"] != ""].copy()
 
             if df.empty:
@@ -1212,17 +1225,17 @@ with tab2:
             puntaje = pd.to_numeric(df[col_total], errors="coerce").fillna(0).astype(int)
             local_examen = df[col_sede].apply(_clean_upper_text) if col_sede else pd.Series([""] * len(df))
 
-            sede_lookup = _build_sede_lookup_from_excel(com_moodle_file)
+            sede_lookup = _build_sede_lookup_from_excel(com_sede_file)
             if not sede_lookup.empty:
                 df = df.merge(sede_lookup, on="DNI", how="left")
-                sede_moodle = df["_sede_moodle"].apply(_clean_upper_text)
-                local_examen = local_examen.mask(sede_moodle != "", sede_moodle)
-                sedes_encontradas = (sede_moodle != "").sum()
-                st.info(f"Sedes Moodle/Acta encontradas por DNI: {sedes_encontradas} / {len(df)}")
+                sede_padron = df["_sede_padron"].apply(_clean_upper_text)
+                local_examen = local_examen.mask(sede_padron != "", sede_padron)
+                sedes_encontradas = (sede_padron != "").sum()
+                st.info(f"Sedes del padrón encontradas por DNI: {sedes_encontradas} / {len(df)}")
             elif local_examen.apply(_norm_text).eq("virtual").any():
                 st.warning(
                     "El archivo de comisión trae DIRECCIÓN LOCAL como VIRTUAL. "
-                    "Para llenar local_examen con la sede real, sube el Excel Moodle/Acta con la columna Sede o Filial."
+                    "Para llenar local_examen con la sede real, sube el padrón con DOCUMENTO/DNI y SEDE/FILIAL."
                 )
 
             out_df = pd.DataFrame({
