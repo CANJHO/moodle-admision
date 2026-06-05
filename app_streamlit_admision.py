@@ -1210,24 +1210,24 @@ with tab3:
         if area == "A":
             return (
                 list(range(1, 26)) +      # Q1-Q25   <- P1-P25
-                list(range(76, 86)) +     # Q26-Q35  <- P76-P85
-                list(range(26, 76)) +     # Q36-Q85  <- P26-P75
+                list(range(26, 76)) +     # Q26-Q75  <- P26-P75
+                list(range(76, 86)) +     # Q76-Q85  <- P76-P85
                 list(range(86, 101))      # Q86-Q100 <- P86-P100
             )
 
         if area == "B":
             return (
                 list(range(1, 26)) +      # Q1-Q25   <- P1-P25
-                list(range(56, 66)) +     # Q26-Q35  <- P56-P65
-                list(range(26, 56)) +     # Q36-Q65  <- P26-P55
+                list(range(26, 56)) +     # Q26-Q55  <- P26-P55
+                list(range(56, 66)) +     # Q56-Q65  <- P56-P65
                 list(range(66, 101))      # Q66-Q100 <- P66-P100
             )
 
         # Área C
         return (
             list(range(1, 36)) +          # Q1-Q35   <- P1-P35
-            list(range(66, 76)) +         # Q36-Q45  <- P66-P75
-            list(range(36, 66)) +         # Q46-Q75  <- P36-P65
+            list(range(36, 66)) +         # Q36-Q65  <- P36-P65
+            list(range(66, 76)) +         # Q66-Q75  <- P66-P75
             list(range(76, 101))          # Q76-Q100 <- P76-P100
         )
 
