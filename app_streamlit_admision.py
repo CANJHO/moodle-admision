@@ -70,6 +70,29 @@ def _find_col_flexible(df: pd.DataFrame, keyword_groups):
     return None
 
 
+def _find_dni_col(df: pd.DataFrame):
+    exact_names = {
+        "dni",
+        "documento",
+        "numerodni",
+        "nrodni",
+        "nrodocumento",
+        "documentoidentidad",
+    }
+    for col in df.columns:
+        if _norm_text(col) in exact_names:
+            return col
+
+    for col in df.columns:
+        col_norm = _norm_text(col)
+        if "tipo" in col_norm:
+            continue
+        if "dni" in col_norm or "documento" in col_norm:
+            return col
+
+    return None
+
+
 def _norm_dni_value(v) -> str:
     """
     Normaliza DNI:
@@ -424,7 +447,7 @@ if run:
 
         if usar_padron:
             df_padron = _read_padron_flexible(padron_file)
-            col_padron_dni = _find_col_flexible(df_padron, [["dni"], ["documento"], ["numero", "dni"]])
+            col_padron_dni = _find_dni_col(df_padron)
             col_padron_codigo = _find_col_flexible(df_padron, [["codigo", "matricula"], ["cod", "matr"], ["codigo"]])
             col_padron_correo = _find_col_flexible(df_padron, [["correo"], ["email"], ["mail"]])
             col_padron_area = _find_col_flexible(df_padron, [["area"]])
@@ -1074,13 +1097,7 @@ with tab2:
             if df_src.empty:
                 continue
 
-            col_dni_src = (
-                "Numero de DNI" if "Numero de DNI" in df_src.columns
-                else ("DNI" if "DNI" in df_src.columns else _find_col_flexible(
-                    df_src,
-                    [["numero", "dni"], ["dni"], ["documento"], ["nro", "dni"]],
-                ))
-            )
+            col_dni_src = _find_dni_col(df_src)
             col_sede_src = (
                 "Sede o Filial" if "Sede o Filial" in df_src.columns
                 else _find_col_flexible(
